@@ -32,6 +32,42 @@
 
 ## 本地运行
 
+### 快速启动
+
+适合第一次试跑，直接使用当前 Python 用户环境。
+
+后端：
+
+```bash
+cd /Users/wangyaruo/Desktop/卡卡/gold-analysis-web
+python3 -m pip install -r backend/requirements.txt
+python3 -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+前端另开一个终端：
+
+```bash
+cd /Users/wangyaruo/Desktop/卡卡/gold-analysis-web/frontend
+npm install
+npm run dev -- --port 5173
+```
+
+打开页面：
+
+- Frontend: `http://127.0.0.1:5173/`
+- Backend API docs: `http://127.0.0.1:8000/docs`
+
+停止服务：
+
+```bash
+lsof -ti tcp:8000 | xargs kill
+lsof -ti tcp:5173 | xargs kill
+```
+
+### 规范启动
+
+适合长期开发，把 Python 依赖安装到项目自己的 `.venv` 中。
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
