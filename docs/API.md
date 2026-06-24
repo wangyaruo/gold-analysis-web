@@ -40,6 +40,9 @@ Authorization: Bearer change-me-local-token
   "price": {
     "symbol": "XAUUSD",
     "value": 2338.42,
+    "unit": "USD/oz",
+    "display_value": 544.95,
+    "display_unit": "CNY/g",
     "timestamp": "2026-06-24T03:30:00+00:00",
     "source": "demo"
   },
@@ -51,7 +54,9 @@ Authorization: Bearer change-me-local-token
       "multiplier": 2,
       "indicator_value": 2335.2,
       "volatility": 5.4,
-      "stop_loss": 2324.4
+      "stop_loss": 2324.4,
+      "display_stop_loss": 541.68,
+      "display_unit": "CNY/g"
     },
     "ma_cross": "golden_cross",
     "cross_strength": 0.014,

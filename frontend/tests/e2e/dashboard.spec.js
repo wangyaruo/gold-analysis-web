@@ -4,12 +4,16 @@ const snapshot = {
   price: {
     symbol: 'XAUUSD',
     value: 2368.42,
+    unit: 'USD/oz',
+    display_value: 552.05,
+    display_unit: 'CNY/g',
     timestamp: new Date().toISOString(),
     source: 'e2e-fixture',
   },
   history: Array.from({ length: 30 }, (_, index) => ({
     index: index + 1,
     price: 2340 + index * 0.9 + Math.sin(index / 2) * 2,
+    display_price: 545 + index * 0.2 + Math.sin(index / 2) * 0.4,
   })),
   indicators: {
     stop_loss: {
@@ -19,6 +23,8 @@ const snapshot = {
       indicator_value: 2352.12,
       volatility: 5.2,
       stop_loss: 2341.72,
+      display_stop_loss: 545.82,
+      display_unit: 'CNY/g',
     },
     ma_cross: 'golden_cross',
     cross_strength: 0.014,
@@ -50,7 +56,8 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({
       json: {
         realtime: { frontend_refresh_seconds: 10, max_data_delay_seconds: 5 },
-        portfolio_defaults: { buy_price: 2300, quantity: 2 },
+        portfolio_defaults: { buy_price: 540, quantity: 2 },
+        display: { currency: 'CNY', unit: 'g' },
       },
     })
   })
@@ -77,17 +84,17 @@ test('renders realtime market snapshot and recommendation', async ({ page }) => 
   await page.goto('/')
 
   await expect(page.getByTestId('connection-status')).toContainText('Connected')
-  await expect(page.getByTestId('current-price')).toContainText('2368.42')
+  await expect(page.getByTestId('current-price')).toContainText('552.05')
   await expect(page.getByTestId('recommendation-action')).toContainText('建议买入')
-  await expect(page.getByTestId('stop-loss')).toContainText('2341.72')
+  await expect(page.getByTestId('stop-loss')).toContainText('545.82')
 })
 
 test('calculates portfolio pnl from user inputs', async ({ page }) => {
   await page.goto('/')
 
-  await page.getByTestId('buy-price').fill('2300')
+  await page.getByTestId('buy-price').fill('540')
   await page.getByTestId('quantity').fill('3')
   await page.getByRole('button', { name: /计算/ }).click()
 
-  await expect(page.getByTestId('pnl-amount')).toContainText('205.26')
+  await expect(page.getByTestId('pnl-amount')).toContainText('36.15')
 })

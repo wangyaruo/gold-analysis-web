@@ -16,7 +16,7 @@ const width = 760
 const height = 300
 const padding = 28
 
-const prices = computed(() => props.history.map((point) => Number(point.price)).filter(Number.isFinite))
+const prices = computed(() => props.history.map((point) => Number(point.display_price ?? point.price)).filter(Number.isFinite))
 
 const bounds = computed(() => {
   const values = prices.value.length ? prices.value : [0]

@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from backend.app.services.decision import TechnicalSignal, build_recommendation
+from backend.app.services.display_price import convert_usd_oz_to_cny_g
 from backend.app.services.indicators import compute_ema, compute_sma, compute_stop_loss
 from backend.app.services.pnl import calculate_pnl
 from backend.app.services.sentiment import analyze_news_sentiment
@@ -36,6 +37,17 @@ class IndicatorTests(unittest.TestCase):
 
         self.assertEqual(result.indicator_value, 2010)
         self.assertEqual(result.stop_loss, 1994)
+
+
+class DisplayPriceTests(unittest.TestCase):
+    def test_convert_usd_oz_to_cny_g_uses_fx_and_troy_ounce(self):
+        result = convert_usd_oz_to_cny_g(
+            price_usd_oz=2340,
+            usd_cny_rate=7.25,
+            troy_ounce_grams=31.1034768,
+        )
+
+        self.assertAlmostEqual(result, 545.44, places=2)
 
 
 class SentimentTests(unittest.TestCase):

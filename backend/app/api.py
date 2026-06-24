@@ -9,6 +9,7 @@ from backend.app.core.auth import require_bearer_token
 from backend.app.core.config import load_config
 from backend.app.services.data_provider import PriceProvider
 from backend.app.services.decision import TechnicalSignal, build_recommendation
+from backend.app.services.display_price import convert_usd_oz_to_cny_g
 from backend.app.services.indicators import compute_stop_loss
 from backend.app.services.market_math import (
     compute_volatility,
@@ -81,23 +82,37 @@ async def market_snapshot() -> dict[str, Any]:
         sentiment.label,
         config.get("decision_rules", {}),
     )
+    display_config = config.get("display", {})
+    display_unit = f"{display_config.get('currency', 'CNY')}/{display_config.get('unit', 'g')}"
+    display_prices = _convert_prices_for_display(prices, display_config)
+    display_stop_loss = _convert_price_for_display(stop_loss.stop_loss, display_config)
 
     return {
         "price": {
             "symbol": validated_tick.symbol,
             "value": validated_tick.price,
+            "unit": "USD/oz",
+            "display_value": display_prices[-1],
+            "display_unit": display_unit,
             "timestamp": validated_tick.timestamp.astimezone(timezone.utc).isoformat(),
             "source": validated_tick.source,
         },
-        "history": _build_history(prices),
+        "history": _build_history(prices, display_prices),
         "indicators": {
-            "stop_loss": stop_loss.__dict__,
+            "stop_loss": {
+                **stop_loss.__dict__,
+                "display_stop_loss": display_stop_loss,
+                "display_unit": display_unit,
+            },
             "ma_cross": ma_cross,
             "cross_strength": cross_strength,
             "bollinger": {
                 "breakout": breakout,
                 "upper_band": upper_band,
                 "lower_band": lower_band,
+                "display_upper_band": _convert_price_for_display(upper_band, display_config) if upper_band else 0.0,
+                "display_lower_band": _convert_price_for_display(lower_band, display_config) if lower_band else 0.0,
+                "display_unit": display_unit,
             },
         },
         "sentiment": sentiment.__dict__,
@@ -128,6 +143,7 @@ async def public_config() -> dict[str, Any]:
     return {
         "realtime": config.get("realtime", {}),
         "portfolio_defaults": config.get("portfolio_defaults", {}),
+        "display": config.get("display", {}),
         "indicator_defaults": config.get("indicators", {}),
         "decision_rule_defaults": config.get("decision_rules", {}),
     }
@@ -141,5 +157,21 @@ def _ensure_history(prices: list[float], latest_price: float, minimum: int) -> l
     return generated + prices
 
 
-def _build_history(prices: list[float]) -> list[dict[str, float]]:
-    return [{"index": index + 1, "price": price} for index, price in enumerate(prices[-80:])]
+def _convert_price_for_display(price: float, display_config: dict[str, Any]) -> float:
+    return convert_usd_oz_to_cny_g(
+        price,
+        usd_cny_rate=float(display_config.get("usd_cny_rate", 7.25)),
+        troy_ounce_grams=float(display_config.get("troy_ounce_grams", 31.1034768)),
+    )
+
+
+def _convert_prices_for_display(prices: list[float], display_config: dict[str, Any]) -> list[float]:
+    return [_convert_price_for_display(price, display_config) for price in prices]
+
+
+def _build_history(prices: list[float], display_prices: list[float]) -> list[dict[str, float]]:
+    pairs = list(zip(prices, display_prices))[-80:]
+    return [
+        {"index": index + 1, "price": price, "display_price": display_price}
+        for index, (price, display_price) in enumerate(pairs)
+    ]

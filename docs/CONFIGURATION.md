@@ -33,6 +33,28 @@ realtime:
 
 前端每 10 秒刷新一次。后端拒绝超过 5 秒的数据，防止交易视图展示过期价格。
 
+## 人民币展示
+
+后端保留数据源原始 `USD/oz` 报价，并额外返回前端展示用的 `CNY/g` 字段。
+
+```yaml
+display:
+  currency: "CNY"
+  unit: "g"
+  source_currency: "USD"
+  source_unit: "oz"
+  usd_cny_rate: 7.25
+  troy_ounce_grams: 31.1034768
+```
+
+换算公式：
+
+```text
+CNY/g = USD/oz * usd_cny_rate / troy_ounce_grams
+```
+
+`usd_cny_rate` 当前是配置值，便于离线和测试环境稳定运行。接入生产环境时可扩展为实时汇率数据源。
+
 ## 止损公式
 
 默认：
