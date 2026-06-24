@@ -34,7 +34,7 @@ docker compose up --build
 
 服务：
 
-- Backend: `http://127.0.0.1:8000`
+- Backend: `http://127.0.0.1:8318`
 - Frontend: `http://127.0.0.1:5173`
 
 ## 生产注意事项

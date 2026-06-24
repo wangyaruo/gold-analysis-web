@@ -41,7 +41,7 @@
 ```bash
 cd /Users/wangyaruo/Desktop/卡卡/gold-analysis-web
 python3 -m pip install -r backend/requirements.txt
-python3 -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+python3 -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8318
 ```
 
 前端另开一个终端：
@@ -55,12 +55,12 @@ npm run dev -- --port 5173
 打开页面：
 
 - Frontend: `http://127.0.0.1:5173/`
-- Backend API docs: `http://127.0.0.1:8000/docs`
+- Backend API docs: `http://127.0.0.1:8318/docs`
 
 停止服务：
 
 ```bash
-lsof -ti tcp:8000 | xargs kill
+lsof -ti tcp:8318 | xargs kill
 lsof -ti tcp:5173 | xargs kill
 ```
 
@@ -72,7 +72,7 @@ lsof -ti tcp:5173 | xargs kill
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r backend/requirements.txt
-uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8318
 ```
 
 ```bash

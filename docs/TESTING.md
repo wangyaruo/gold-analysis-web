@@ -39,4 +39,4 @@ cd frontend
 npm run build
 ```
 
-后端可用 `uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000` 启动后访问 `/api/health`。
+后端可用 `uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8318` 启动后访问 `/api/health`。
