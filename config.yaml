@@ -1,0 +1,111 @@
+# Gold Analysis Web default configuration.
+# Keep secrets out of this file. Put API keys and auth tokens in environment
+# variables, using .env.example as the local template.
+
+app:
+  name: "Gold Analysis Web"
+  environment: "development"
+
+security:
+  bearer_token_env: "API_AUTH_TOKEN"
+  # Development-only fallback token. Disable in production by setting
+  # allow_insecure_dev_token to false and exporting API_AUTH_TOKEN.
+  allow_insecure_dev_token: true
+  development_token: "change-me-local-token"
+
+realtime:
+  frontend_refresh_seconds: 10
+  max_data_delay_seconds: 5
+
+data_sources:
+  active: "demo"
+  price:
+    demo:
+      type: "demo"
+      symbol: "XAUUSD"
+      base_price: 2335.0
+      volatility: 6.5
+      min_price: 500
+      max_price: 5000
+    goldpriceapi:
+      type: "http"
+      endpoint: "https://www.goldapi.io/api/XAU/USD"
+      auth_header: "x-access-token"
+      api_key_env: "GOLD_API_KEY"
+      response_format: "json"
+      json_paths:
+        price: "price"
+        timestamp: "timestamp"
+      timeout_seconds: 5
+      min_price: 500
+      max_price: 5000
+    yahoo_finance:
+      type: "http"
+      endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
+      api_key_env: ""
+      response_format: "json"
+      json_paths:
+        price: "chart.result.0.meta.regularMarketPrice"
+        timestamp: "chart.result.0.meta.regularMarketTime"
+      timeout_seconds: 5
+      min_price: 500
+      max_price: 5000
+
+retry:
+  max_attempts: 3
+  base_delay_seconds: 0.2
+  multiplier: 2
+
+indicators:
+  stop_loss:
+    type: "SMA"
+    period: 20
+    multiplier: 2
+    volatility_window: 20
+  moving_average:
+    short_period: 5
+    long_period: 20
+  bollinger_bands:
+    period: 20
+    stddev_multiplier: 2
+
+decision_rules:
+  min_cross_strength: 0.01
+  require_bollinger_upper_breakout: true
+  min_confidence: 0.7
+  sentiment_required_for_buy: "positive"
+
+news:
+  provider: "newsapi"
+  endpoint: "https://newsapi.org/v2/everything"
+  api_key_env: "NEWS_API_KEY"
+  query: "gold OR XAUUSD OR bullion"
+  language: "en"
+  page_size: 10
+  demo_articles:
+    - title: "Gold rallies as inflation hedge demand rises"
+      description: "Central bank buying supports bullion prices."
+    - title: "Strong dollar caps gold gains"
+      description: "Rate hike uncertainty weighs on short-term appetite."
+  sentiment:
+    positive_keywords:
+      - "rallies"
+      - "inflation hedge"
+      - "central bank buying"
+      - "safe haven demand"
+      - "geopolitical risk"
+      - "weaker dollar"
+      - "rate cut"
+    negative_keywords:
+      - "strong dollar"
+      - "rate hike"
+      - "hawkish fed"
+      - "profit taking"
+      - "yields rise"
+      - "risk appetite"
+    positive_threshold: 2
+    negative_threshold: -2
+
+portfolio_defaults:
+  buy_price: 2300
+  quantity: 1
