@@ -260,6 +260,31 @@ h2 {
   stroke-linecap: round;
 }
 
+.latest-price-guide {
+  stroke: #b98216;
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+  opacity: 0.58;
+}
+
+.latest-price-dot {
+  fill: #ffffff;
+  stroke: #b98216;
+  stroke-width: 3;
+}
+
+.latest-price-badge {
+  fill: #18212f;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.latest-price-label {
+  fill: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .stop-line {
   stroke: #d63f3f;
   stroke-width: 2;

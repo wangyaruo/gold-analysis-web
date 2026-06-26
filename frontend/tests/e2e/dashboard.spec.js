@@ -85,6 +85,7 @@ test('renders realtime market snapshot and recommendation', async ({ page }) => 
 
   await expect(page.getByTestId('connection-status')).toContainText('Connected')
   await expect(page.getByTestId('current-price')).toContainText('552.05')
+  await expect(page.getByTestId('latest-chart-price')).toContainText('551.17')
   await expect(page.getByTestId('recommendation-action')).toContainText('建议买入')
   await expect(page.getByTestId('stop-loss')).toContainText('545.82')
 })

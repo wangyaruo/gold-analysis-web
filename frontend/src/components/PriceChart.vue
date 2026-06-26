@@ -15,11 +15,13 @@ const props = defineProps({
 const width = 760
 const height = 300
 const padding = 28
+const latestLabelWidth = 82
+const latestLabelHeight = 24
 
 const prices = computed(() => props.history.map((point) => Number(point.display_price ?? point.price)).filter(Number.isFinite))
 
 const bounds = computed(() => {
-  const values = prices.value.length ? prices.value : [0]
+  const values = prices.value.length ? [...prices.value] : [0]
   if (props.stopLoss) values.push(props.stopLoss)
   const min = Math.min(...values)
   const max = Math.max(...values)
@@ -45,6 +47,29 @@ const linePath = computed(() => {
   return prices.value
     .map((price, index) => `${index === 0 ? 'M' : 'L'} ${x(index).toFixed(2)} ${y(price).toFixed(2)}`)
     .join(' ')
+})
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max)
+}
+
+const latestPoint = computed(() => {
+  if (!prices.value.length) return null
+  const index = prices.value.length - 1
+  const value = prices.value[index]
+  const pointX = x(index)
+  const pointY = y(value)
+  const labelX = clamp(pointX - latestLabelWidth / 2, padding, width - padding - latestLabelWidth)
+  const labelY = pointY - latestLabelHeight - 12 < padding ? pointY + 12 : pointY - latestLabelHeight - 12
+
+  return {
+    value,
+    pointX,
+    pointY,
+    labelX,
+    labelY,
+    guideY: labelY > pointY ? labelY : labelY + latestLabelHeight,
+  }
 })
 
 const candleBars = computed(() => {
@@ -101,6 +126,33 @@ const candleBars = computed(() => {
       </g>
       <path v-if="linePath" :d="`${linePath} L ${x(prices.length - 1)} ${height - padding} L ${padding} ${height - padding} Z`" fill="url(#price-fill)" />
       <path v-if="linePath" :d="linePath" class="price-line" />
+      <g v-if="latestPoint" class="latest-price-marker">
+        <line
+          :x1="latestPoint.pointX"
+          :x2="latestPoint.pointX"
+          :y1="latestPoint.pointY"
+          :y2="latestPoint.guideY"
+          class="latest-price-guide"
+        />
+        <circle :cx="latestPoint.pointX" :cy="latestPoint.pointY" r="5" class="latest-price-dot" />
+        <rect
+          :x="latestPoint.labelX"
+          :y="latestPoint.labelY"
+          :width="latestLabelWidth"
+          :height="latestLabelHeight"
+          rx="6"
+          class="latest-price-badge"
+        />
+        <text
+          :x="latestPoint.labelX + latestLabelWidth / 2"
+          :y="latestPoint.labelY + 16"
+          class="latest-price-label"
+          data-testid="latest-chart-price"
+          text-anchor="middle"
+        >
+          {{ latestPoint.value.toFixed(2) }}
+        </text>
+      </g>
       <line
         v-if="stopLoss"
         :x1="padding"
