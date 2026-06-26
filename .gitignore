@@ -6,4 +6,7 @@ __pycache__/
 .env
 playwright-report/
 test-results/
-.idea/
+.idea/*.log
+*.pid
+*.bak-*
+*.bak

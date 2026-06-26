@@ -33,21 +33,21 @@ def build_recommendation(
 
     if signal.ma_cross == "golden_cross" and signal.cross_strength >= min_cross_strength:
         score += 0.4
-        reasons.append("MA golden cross")
+        reasons.append("均线金叉")
     else:
-        risks.append("MA golden cross threshold not met")
+        risks.append("均线金叉未达阈值")
 
     if not require_upper_breakout or signal.bollinger_breakout == "upper":
         score += 0.25
-        reasons.append("price broke above Bollinger upper band")
+        reasons.append("价格突破布林带上轨")
     else:
-        risks.append("price has not broken above Bollinger upper band")
+        risks.append("价格未突破布林带上轨")
 
     if sentiment_label == "positive":
         score += 0.35
-        reasons.append("news sentiment is positive")
+        reasons.append("新闻情绪偏正面")
     else:
-        risks.append(f"news sentiment is {sentiment_label}")
+        risks.append("新闻情绪未偏正面")
 
     confidence = round(min(score, 1.0), 3)
     action = "buy" if confidence >= min_confidence and not risks else "hold"

@@ -154,6 +154,11 @@ def _parse_response_payload(text: str, response_format: str) -> dict[str, Any]:
         if not match:
             raise MarketDataError("invalid JSONP market data response")
         return json.loads(match.group(1))
+    if response_format == "jsvar":
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise MarketDataError("invalid jsvar market data response")
+        return json.loads(match.group(0))
     return json.loads(text)
 
 
@@ -161,7 +166,10 @@ def _parse_timestamp(value: Any) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        seconds = float(value)
+        if seconds > 1e12:  # 毫秒级 epoch -> 秒
+            seconds /= 1000.0
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
     if isinstance(value, str):
         normalized = value.replace("Z", "+00:00")
         return datetime.fromisoformat(normalized).astimezone(timezone.utc)

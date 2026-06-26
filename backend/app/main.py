@@ -6,9 +6,9 @@ from backend.app.core.config import load_config
 
 
 app = FastAPI(
-    title="Gold Analysis API",
+    title="黄金分析 API",
     version="1.0.0",
-    description="Realtime gold market data, indicators, recommendations, and PnL APIs.",
+    description="实时黄金行情、技术指标、交易建议与盈亏计算接口。",
 )
 config = load_config()
 

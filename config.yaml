@@ -33,12 +33,49 @@ display:
   troy_ounce_grams: 31.1034768
 
 data_sources:
-  active: "yahoo_finance"
+  active: "twelve_data"
   fallback: "demo"
   price:
+    cngold_spot:
+      type: "http"
+      label: "中国黄金网 现货金价"
+      description: "中国黄金网(汇通财经)现货黄金行情，美元/盎司，后端换算人民币/克。"
+      name: "cngold_spot"
+      symbol: "XAUUSD"
+      endpoint: "https://api.jijinhao.com/quoteCenter/realTime.htm?codes=JO_92233"
+      api_key_env: ""
+      response_format: "jsvar"
+      headers:
+        User-Agent: "Mozilla/5.0"
+        Referer: "https://quote.cngold.org/"
+      json_paths:
+        price: "JO_92233.q63"
+        timestamp: "JO_92233.time"
+      timeout_seconds: 8
+      max_data_delay_seconds: 43200
+      min_price: 500
+      max_price: 8000
+    twelve_data:
+      type: "http"
+      label: "Twelve Data 现货金价 XAU/USD"
+      description: "Twelve Data 授权金价接口（带 API Key），稳定实时。"
+      name: "twelve_data"
+      symbol: "XAU/USD"
+      endpoint: "https://api.twelvedata.com/price?symbol=XAU/USD"
+      api_key_env: "TWELVE_DATA_KEY"
+      auth_header: "Authorization"
+      response_format: "json"
+      headers:
+        User-Agent: "Mozilla/5.0"
+      json_paths:
+        price: "price"
+        timestamp: "timestamp"
+      timeout_seconds: 8
+      min_price: 500
+      max_price: 8000
     demo:
       type: "demo"
-      label: "Demo Reference"
+      label: "演示参考数据"
       description: "Offline synthetic reference data used when external sources fail."
       name: "reference-fallback-2026-06-26"
       symbol: "XAUUSD"
@@ -46,50 +83,6 @@ data_sources:
       # The live Yahoo source above should be preferred whenever network works.
       base_price: 4018.77
       volatility: 8.0
-      min_price: 500
-      max_price: 8000
-    goldpriceapi:
-      type: "http"
-      label: "GoldAPI XAU/USD"
-      description: "Authenticated spot XAU/USD feed. Requires GOLD_API_KEY."
-      endpoint: "https://www.goldapi.io/api/XAU/USD"
-      auth_header: "x-access-token"
-      api_key_env: "GOLD_API_KEY"
-      response_format: "json"
-      json_paths:
-        price: "price"
-        timestamp: "timestamp"
-      timeout_seconds: 5
-      min_price: 500
-      max_price: 8000
-    yahoo_finance:
-      type: "http"
-      label: "Yahoo Finance GC=F"
-      description: "Yahoo Finance gold futures chart feed."
-      name: "yahoo_finance_gc_f"
-      symbol: "GC=F"
-      endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
-      api_key_env: ""
-      response_format: "json"
-      json_paths:
-        price: "chart.result.0.meta.regularMarketPrice"
-        timestamp: "chart.result.0.meta.regularMarketTime"
-      timeout_seconds: 5
-      min_price: 500
-      max_price: 8000
-    yahoo_finance_spot:
-      type: "http"
-      label: "Yahoo Finance XAU/USD"
-      description: "Yahoo Finance spot gold against USD chart feed."
-      name: "yahoo_finance_xauusd"
-      symbol: "XAUUSD=X"
-      endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X"
-      api_key_env: ""
-      response_format: "json"
-      json_paths:
-        price: "chart.result.0.meta.regularMarketPrice"
-        timestamp: "chart.result.0.meta.regularMarketTime"
-      timeout_seconds: 5
       min_price: 500
       max_price: 8000
     eastmoney_au9999:
@@ -148,12 +141,16 @@ news:
   language: "en"
   page_size: 10
   demo_articles:
-    - title: "Gold rallies as inflation hedge demand rises"
-      description: "Central bank buying supports bullion prices."
-    - title: "Strong dollar caps gold gains"
-      description: "Rate hike uncertainty weighs on short-term appetite."
+    - title: "金价上涨，避险与抗通胀需求升温"
+      description: "央行持续购金支撑金价。"
+    - title: "美元走强限制黄金涨幅"
+      description: "加息不确定性压制短期买盘。"
   sentiment:
     positive_keywords:
+      - "上涨"
+      - "避险"
+      - "抗通胀"
+      - "央行购金"
       - "rallies"
       - "inflation hedge"
       - "central bank buying"
@@ -162,6 +159,8 @@ news:
       - "weaker dollar"
       - "rate cut"
     negative_keywords:
+      - "美元走强"
+      - "加息"
       - "strong dollar"
       - "rate hike"
       - "hawkish fed"
