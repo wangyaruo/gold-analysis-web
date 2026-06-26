@@ -26,12 +26,24 @@ Authorization: Bearer change-me-local-token
 
 - `realtime`: 刷新频率和延迟阈值。
 - `portfolio_defaults`: 默认买入价和持有数量。
+- `data_sources`: 前端可切换的数据源列表，包含 `active`、`fallback` 和 `options`。
 - `indicator_defaults`: 指标默认参数。
 - `decision_rule_defaults`: 推荐规则阈值。
 
 ## GET /api/market/snapshot
 
 返回市场快照。
+
+可选查询参数：
+
+- `source`: 指定行情源，例如 `yahoo_finance`、`yahoo_finance_spot`、`goldpriceapi`、`demo`。不传时使用 `config.yaml` 中的 `data_sources.active`。
+
+示例：
+
+```http
+GET /api/market/snapshot?source=yahoo_finance_spot
+Authorization: Bearer change-me-local-token
+```
 
 核心响应：
 
@@ -44,7 +56,8 @@ Authorization: Bearer change-me-local-token
     "display_value": 544.95,
     "display_unit": "CNY/g",
     "timestamp": "2026-06-24T03:30:00+00:00",
-    "source": "demo"
+    "source": "yahoo_finance_xauusd",
+    "requested_source": "yahoo_finance_spot"
   },
   "history": [{"index": 1, "price": 2320.1}],
   "indicators": {

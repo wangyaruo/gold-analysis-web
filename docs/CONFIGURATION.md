@@ -6,12 +6,22 @@
 
 ```yaml
 data_sources:
-  active: "demo"
+  active: "yahoo_finance"
+  fallback: "demo"
 ```
 
-- `demo`: 默认数据源，可离线运行。
-- `goldpriceapi`: 通过 `GOLD_API_KEY` 读取认证密钥。
-- `yahoo_finance`: 使用 Yahoo Finance chart API 示例端点。
+- `yahoo_finance`: 默认数据源，Yahoo Finance 黄金期货 `GC=F`。
+- `yahoo_finance_spot`: Yahoo Finance 现货黄金兑美元 `XAUUSD=X`，用于和期货报价交叉参考。
+- `goldpriceapi`: GoldAPI XAU/USD，需要通过 `GOLD_API_KEY` 读取认证密钥。
+- `demo`: 离线参考数据源，也是外部源失败时的 fallback。
+
+前端会读取 `/api/config/public` 返回的 `data_sources.options`，在价格图表区域提供行情源选择器。切换行情源时，请求会携带 `source` 查询参数，例如：
+
+```text
+GET /api/market/snapshot?source=yahoo_finance_spot
+```
+
+如果指定源请求失败，系统会按 `fallback` 配置回退到 `demo`，但响应中的 `price.requested_source` 仍保留用户选择的源，`price.source` 表示实际返回数据的源。
 
 每个 HTTP 数据源支持：
 
@@ -22,6 +32,7 @@ data_sources:
 - `json_paths`: 从响应 JSON 中读取价格和时间戳的路径。
 - `timeout_seconds`: 单次请求超时。
 - `min_price` / `max_price`: 合理价格区间校验。
+- `label` / `description`: 前端展示用名称和说明，不包含敏感信息。
 
 ## 实时性
 
@@ -66,6 +77,13 @@ data_sources:
 ```
 
 当服务器无法访问 Yahoo 或解析失败时，系统自动回退到 `demo`。当前 `demo` 不再使用旧的 2335 USD/oz，而是按 2026-06-26 公开行情参考值设置为 `4018.77 USD/oz`，避免无网环境展示明显过期价格。
+
+不同数据源可能存在口径差异：
+
+- `GC=F` 更接近期货合约报价。
+- `XAUUSD=X` 更接近现货黄金兑美元报价。
+- 认证源如 `goldpriceapi` 适合生产环境接入稳定授权数据。
+- `demo` 只用于开发、离线、fallback，不应用于真实交易判断。
 
 ## 止损公式
 

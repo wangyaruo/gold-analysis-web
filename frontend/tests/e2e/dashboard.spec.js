@@ -58,12 +58,30 @@ test.beforeEach(async ({ page }) => {
         realtime: { frontend_refresh_seconds: 10, max_data_delay_seconds: 5 },
         portfolio_defaults: { buy_price: 540, quantity: 2 },
         display: { currency: 'CNY', unit: 'g' },
+        data_sources: {
+          active: 'yahoo_finance',
+          fallback: 'demo',
+          options: [
+            { key: 'yahoo_finance', label: 'Yahoo Finance GC=F', requires_api_key: false },
+            { key: 'goldpriceapi', label: 'GoldAPI XAU/USD', requires_api_key: true },
+            { key: 'demo', label: 'Demo Reference', requires_api_key: false },
+          ],
+        },
       },
     })
   })
 
-  await page.route('**/api/market/snapshot', async (route) => {
-    await route.fulfill({ json: snapshot })
+  await page.route('**/api/market/snapshot**', async (route) => {
+    const source = new URL(route.request().url()).searchParams.get('source') || 'yahoo_finance'
+    await route.fulfill({
+      json: {
+        ...snapshot,
+        price: {
+          ...snapshot.price,
+          source,
+        },
+      },
+    })
   })
 
   await page.route('**/api/portfolio/pnl', async (route) => {
@@ -85,9 +103,18 @@ test('renders realtime market snapshot and recommendation', async ({ page }) => 
 
   await expect(page.getByTestId('connection-status')).toContainText('Connected')
   await expect(page.getByTestId('current-price')).toContainText('552.05')
+  await expect(page.getByTestId('price-source-name')).toContainText('yahoo_finance')
   await expect(page.getByTestId('latest-chart-price')).toContainText('551.17')
   await expect(page.getByTestId('recommendation-action')).toContainText('建议买入')
   await expect(page.getByTestId('stop-loss')).toContainText('545.82')
+})
+
+test('switches market data source from the dashboard', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByTestId('price-source-select').selectOption('demo')
+
+  await expect(page.getByTestId('price-source-name')).toContainText('demo')
 })
 
 test('calculates portfolio pnl from user inputs', async ({ page }) => {

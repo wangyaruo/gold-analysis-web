@@ -7,7 +7,7 @@ flowchart LR
   API --> PriceProvider["Price Provider"]
   API --> NewsProvider["News Provider"]
   PriceProvider --> Demo["Demo fallback"]
-  PriceProvider --> GoldAPI["Gold API / Yahoo Finance"]
+  PriceProvider --> MarketFeeds["Yahoo Futures / Yahoo Spot / GoldAPI"]
   NewsProvider --> DemoNews["Demo articles"]
   NewsProvider --> NewsAPI["NewsAPI"]
   API --> Indicators["SMA / EMA / Bollinger / Stop Loss"]
@@ -19,7 +19,7 @@ flowchart LR
 
 - `frontend/` 只负责展示、用户输入、轮询和连接状态。
 - `backend/app/core/` 负责配置、认证和结构化日志。
-- `backend/app/services/` 负责价格数据、新闻情绪、指标、推荐和盈亏计算。
+- `backend/app/services/` 负责可切换价格数据源、新闻情绪、指标、推荐和盈亏计算。
 - `config.yaml` 是唯一业务配置入口；密钥不写入 YAML，只通过环境变量注入。
 
 ## 实时更新

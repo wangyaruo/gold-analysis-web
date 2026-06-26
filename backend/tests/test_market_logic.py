@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from backend.app.services.decision import TechnicalSignal, build_recommendation
@@ -7,7 +8,7 @@ from backend.app.services.indicators import compute_ema, compute_sma, compute_st
 from backend.app.services.pnl import calculate_pnl
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import PriceTick, validate_price_tick
-from backend.app.services.data_provider import PriceProvider
+from backend.app.services.data_provider import MarketDataError, PriceProvider
 
 
 class IndicatorTests(unittest.TestCase):
@@ -61,6 +62,70 @@ class DisplayPriceTests(unittest.TestCase):
 
 
 class PriceProviderTests(unittest.TestCase):
+    def test_source_config_selects_named_source(self):
+        provider = PriceProvider(
+            {
+                "data_sources": {
+                    "active": "yahoo_finance",
+                    "fallback": "demo",
+                    "price": {
+                        "yahoo_finance": {"type": "http", "name": "Yahoo"},
+                        "goldpriceapi": {"type": "http", "name": "GoldAPI"},
+                        "demo": {"type": "demo"},
+                    },
+                }
+            }
+        )
+
+        result = provider.source_config("goldpriceapi")
+
+        self.assertEqual(result["name"], "GoldAPI")
+
+    def test_source_config_rejects_unknown_source(self):
+        provider = PriceProvider(
+            {
+                "data_sources": {
+                    "active": "demo",
+                    "price": {"demo": {"type": "demo"}},
+                }
+            }
+        )
+
+        with self.assertRaises(MarketDataError) as context:
+            provider.source_config("missing_source")
+
+        self.assertIn("unknown price source", str(context.exception))
+
+    def test_price_history_is_kept_per_source(self):
+        provider = PriceProvider(
+            {
+                "data_sources": {
+                    "active": "primary_demo",
+                    "price": {
+                        "primary_demo": {
+                            "type": "demo",
+                            "symbol": "XAUUSD",
+                            "base_price": 4000,
+                            "volatility": 0,
+                        },
+                        "secondary_demo": {
+                            "type": "demo",
+                            "symbol": "XAUUSD",
+                            "base_price": 4100,
+                            "volatility": 0,
+                        },
+                    },
+                },
+                "retry": {"max_attempts": 1},
+            }
+        )
+
+        asyncio.run(provider.latest_tick("primary_demo"))
+        asyncio.run(provider.latest_tick("secondary_demo"))
+
+        self.assertAlmostEqual(provider.price_history("primary_demo")[0], 4000.18, places=2)
+        self.assertAlmostEqual(provider.price_history("secondary_demo")[0], 4100.36, places=2)
+
     def test_active_source_falls_back_to_demo_when_configured(self):
         provider = PriceProvider(
             {

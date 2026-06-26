@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.auth import require_bearer_token
 from backend.app.core.config import load_config
-from backend.app.services.data_provider import PriceProvider
+from backend.app.services.data_provider import MarketDataError, PriceProvider
 from backend.app.services.decision import TechnicalSignal, build_recommendation
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
 from backend.app.services.indicators import compute_stop_loss
@@ -33,10 +33,14 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/market/snapshot", dependencies=[Depends(require_bearer_token)])
-async def market_snapshot() -> dict[str, Any]:
+async def market_snapshot(source: str | None = None) -> dict[str, Any]:
     config = load_config()
-    tick = await _provider.latest_tick()
-    source_config = config["data_sources"]["price"][config["data_sources"].get("active", "demo")]
+    selected_source = source or None
+    try:
+        source_config = _provider.source_config(selected_source)
+        tick = await _provider.latest_tick(selected_source)
+    except MarketDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     realtime_config = config.get("realtime", {})
     validated_tick = validate_price_tick(
         tick,
@@ -45,7 +49,7 @@ async def market_snapshot() -> dict[str, Any]:
         max_delay_seconds=int(realtime_config.get("max_data_delay_seconds", 5)),
     )
 
-    prices = _ensure_history(_provider.prices, validated_tick.price, minimum=25)
+    prices = _ensure_history(_provider.price_history(source_config.get("_key")), validated_tick.price, minimum=25)
     indicator_config = config.get("indicators", {})
     stop_loss_config = indicator_config.get("stop_loss", {})
     volatility = compute_volatility(prices, int(stop_loss_config.get("volatility_window", 20)))
@@ -96,6 +100,7 @@ async def market_snapshot() -> dict[str, Any]:
             "display_unit": display_unit,
             "timestamp": validated_tick.timestamp.astimezone(timezone.utc).isoformat(),
             "source": validated_tick.source,
+            "requested_source": source_config.get("_key"),
         },
         "history": _build_history(prices, display_prices),
         "indicators": {
@@ -144,6 +149,7 @@ async def public_config() -> dict[str, Any]:
         "realtime": config.get("realtime", {}),
         "portfolio_defaults": config.get("portfolio_defaults", {}),
         "display": config.get("display", {}),
+        "data_sources": _public_data_sources(config),
         "indicator_defaults": config.get("indicators", {}),
         "decision_rule_defaults": config.get("decision_rules", {}),
     }
@@ -175,3 +181,26 @@ def _build_history(prices: list[float], display_prices: list[float]) -> list[dic
         {"index": index + 1, "price": price, "display_price": display_price}
         for index, (price, display_price) in enumerate(pairs)
     ]
+
+
+def _public_data_sources(config: dict[str, Any]) -> dict[str, Any]:
+    sources = config.get("data_sources", {})
+    price_sources = sources.get("price", {})
+    options = []
+    for key, source_config in price_sources.items():
+        api_key_env = source_config.get("api_key_env") or ""
+        options.append(
+            {
+                "key": key,
+                "label": source_config.get("label", source_config.get("name", key)),
+                "type": source_config.get("type", "http"),
+                "symbol": source_config.get("symbol", "XAUUSD"),
+                "description": source_config.get("description", ""),
+                "requires_api_key": bool(api_key_env),
+            }
+        )
+    return {
+        "active": sources.get("active", "demo"),
+        "fallback": sources.get("fallback"),
+        "options": options,
+    }

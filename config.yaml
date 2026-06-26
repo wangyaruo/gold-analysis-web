@@ -38,6 +38,8 @@ data_sources:
   price:
     demo:
       type: "demo"
+      label: "Demo Reference"
+      description: "Offline synthetic reference data used when external sources fail."
       name: "reference-fallback-2026-06-26"
       symbol: "XAUUSD"
       # Reference checked on 2026-06-26: spot gold around 4018.77 USD/oz.
@@ -48,6 +50,8 @@ data_sources:
       max_price: 8000
     goldpriceapi:
       type: "http"
+      label: "GoldAPI XAU/USD"
+      description: "Authenticated spot XAU/USD feed. Requires GOLD_API_KEY."
       endpoint: "https://www.goldapi.io/api/XAU/USD"
       auth_header: "x-access-token"
       api_key_env: "GOLD_API_KEY"
@@ -60,9 +64,26 @@ data_sources:
       max_price: 8000
     yahoo_finance:
       type: "http"
+      label: "Yahoo Finance GC=F"
+      description: "Yahoo Finance gold futures chart feed."
       name: "yahoo_finance_gc_f"
       symbol: "GC=F"
       endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
+      api_key_env: ""
+      response_format: "json"
+      json_paths:
+        price: "chart.result.0.meta.regularMarketPrice"
+        timestamp: "chart.result.0.meta.regularMarketTime"
+      timeout_seconds: 5
+      min_price: 500
+      max_price: 8000
+    yahoo_finance_spot:
+      type: "http"
+      label: "Yahoo Finance XAU/USD"
+      description: "Yahoo Finance spot gold against USD chart feed."
+      name: "yahoo_finance_xauusd"
+      symbol: "XAUUSD=X"
+      endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X"
       api_key_env: ""
       response_format: "json"
       json_paths:

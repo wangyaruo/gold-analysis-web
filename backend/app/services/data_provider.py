@@ -21,14 +21,18 @@ class PriceProvider:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self._demo_counter = 0
-        self._prices: list[float] = []
+        self._prices_by_source: dict[str, list[float]] = {}
 
     @property
     def prices(self) -> list[float]:
-        return list(self._prices)
+        return self.price_history()
 
-    async def latest_tick(self) -> PriceTick:
-        source_config = self._active_source_config()
+    def price_history(self, source_name: str | None = None) -> list[float]:
+        return list(self._prices_by_source.get(self._source_key(source_name), []))
+
+    async def latest_tick(self, source_name: str | None = None) -> PriceTick:
+        history_key = self._source_key(source_name)
+        source_config = self.source_config(source_name)
         try:
             tick = await self._fetch_with_retry(source_config)
         except Exception:
@@ -36,9 +40,13 @@ class PriceProvider:
             if not fallback_config:
                 raise
             tick = await self._fetch_with_retry(fallback_config)
-        self._prices.append(tick.price)
-        self._prices = self._prices[-240:]
+        self._append_price(history_key, tick.price)
         return tick
+
+    def _append_price(self, source_key: str, price: float) -> None:
+        prices = self._prices_by_source.setdefault(source_key, [])
+        prices.append(price)
+        self._prices_by_source[source_key] = prices[-240:]
 
     async def _fetch_with_retry(self, source_config: dict[str, Any]) -> PriceTick:
         retry_config = self.config.get("retry", {})
@@ -66,13 +74,21 @@ class PriceProvider:
 
         raise MarketDataError(f"failed to fetch market data after {max_attempts} attempts: {last_error}")
 
-    def _active_source_config(self) -> dict[str, Any]:
+    def source_config(self, source_name: str | None = None) -> dict[str, Any]:
         sources = self.config.get("data_sources", {})
-        active = sources.get("active", "demo")
+        selected = source_name or sources.get("active", "demo")
         price_sources = sources.get("price", {})
-        if active not in price_sources:
-            raise MarketDataError(f"unknown active price source: {active}")
-        return dict(price_sources[active])
+        if selected not in price_sources:
+            raise MarketDataError(f"unknown price source: {selected}")
+        config = dict(price_sources[selected])
+        config["_key"] = selected
+        return config
+
+    def _active_source_config(self) -> dict[str, Any]:
+        return self.source_config()
+
+    def _source_key(self, source_name: str | None = None) -> str:
+        return self.source_config(source_name).get("_key", source_name or "demo")
 
     def fallback_source_config(self) -> Optional[dict[str, Any]]:
         sources = self.config.get("data_sources", {})
@@ -82,7 +98,9 @@ class PriceProvider:
         price_sources = sources.get("price", {})
         if fallback not in price_sources:
             raise MarketDataError(f"unknown fallback price source: {fallback}")
-        return dict(price_sources[fallback])
+        config = dict(price_sources[fallback])
+        config["_key"] = fallback
+        return config
 
     def _fetch_demo(self, source_config: dict[str, Any]) -> PriceTick:
         base_price = float(source_config.get("base_price", 4018.77))

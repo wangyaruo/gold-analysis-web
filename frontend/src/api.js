@@ -40,8 +40,11 @@ export function getPublicConfig() {
   return request('/api/config/public')
 }
 
-export function getMarketSnapshot() {
-  return request('/api/market/snapshot')
+export function getMarketSnapshot(source) {
+  const params = new URLSearchParams()
+  if (source) params.set('source', source)
+  const query = params.toString()
+  return request(`/api/market/snapshot${query ? `?${query}` : ''}`)
 }
 
 export function calculatePnl(payload) {

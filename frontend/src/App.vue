@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Calculator,
   Clock3,
+  Database,
   RefreshCw,
   ShieldCheck,
   TrendingUp,
@@ -22,6 +23,7 @@ const lastUpdated = ref(null)
 const nextRefreshAt = ref(null)
 const timer = ref(null)
 const pnl = ref(null)
+const selectedSource = ref('')
 const portfolio = reactive({
   buy_price: 2300,
   quantity: 1,
@@ -32,6 +34,7 @@ const currentPrice = computed(() => snapshot.value?.price?.display_value || snap
 const rawPrice = computed(() => snapshot.value?.price?.value || 0)
 const displayUnit = computed(() => snapshot.value?.price?.display_unit || 'CNY/g')
 const sourceUnit = computed(() => snapshot.value?.price?.unit || 'USD/oz')
+const sourceOptions = computed(() => publicConfig.value?.data_sources?.options || [])
 const stopLoss = computed(() => snapshot.value?.indicators?.stop_loss?.display_stop_loss || snapshot.value?.indicators?.stop_loss?.stop_loss || null)
 const recommendation = computed(() => snapshot.value?.recommendation || {
   action: 'hold',
@@ -63,13 +66,14 @@ async function loadConfig() {
   const defaults = publicConfig.value.portfolio_defaults || {}
   portfolio.buy_price = Number(defaults.buy_price || portfolio.buy_price)
   portfolio.quantity = Number(defaults.quantity || portfolio.quantity)
+  selectedSource.value = publicConfig.value.data_sources?.active || sourceOptions.value[0]?.key || ''
 }
 
 async function refreshSnapshot() {
   loading.value = true
   errorMessage.value = ''
   try {
-    snapshot.value = await getMarketSnapshot()
+    snapshot.value = await getMarketSnapshot(selectedSource.value)
     connected.value = true
     lastUpdated.value = new Date()
     nextRefreshAt.value = new Date(Date.now() + refreshSeconds.value * 1000)
@@ -155,6 +159,7 @@ onUnmounted(() => {
           <span>刷新间隔 {{ refreshSeconds }}s</span>
           <span>数据延迟阈值 {{ snapshot?.max_data_delay_seconds || 5 }}s</span>
           <span>原始 {{ rawPrice ? rawPrice.toFixed(2) : '--' }} {{ sourceUnit }}</span>
+          <span data-testid="price-source-name">源 {{ snapshot?.price?.source || selectedSource || '--' }}</span>
         </div>
       </div>
       <div class="recommendation" :class="`recommendation-${recommendation.action}`">
@@ -173,7 +178,17 @@ onUnmounted(() => {
             <p class="label">价格图表</p>
             <h2>折线 + K线视图</h2>
           </div>
-          <Activity :size="20"/>
+          <div class="chart-actions">
+            <label v-if="sourceOptions.length" class="source-picker">
+              <Database :size="16"/>
+              <select v-model="selectedSource" data-testid="price-source-select" @change="refreshSnapshot">
+                <option v-for="source in sourceOptions" :key="source.key" :value="source.key">
+                  {{ source.label }}{{ source.requires_api_key ? ' · Key' : '' }}
+                </option>
+              </select>
+            </label>
+            <Activity :size="20"/>
+          </div>
         </div>
         <PriceChart :history="snapshot?.history || []" :stop-loss="stopLoss"/>
       </article>

@@ -23,7 +23,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -235,6 +236,37 @@ h2 {
   margin-bottom: 16px;
 }
 
+.chart-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.source-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #d6deeb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #445066;
+}
+
+.source-picker select {
+  width: min(220px, 32vw);
+  min-width: 130px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #1f2937;
+  font-weight: 700;
+}
+
 .chart-shell {
   width: 100%;
   aspect-ratio: 760 / 300;
@@ -418,6 +450,24 @@ dd {
 
   .dashboard-grid {
     grid-template-columns: 1fr;
+  }
+
+  .panel-header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .chart-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .source-picker {
+    flex: 1;
+  }
+
+  .source-picker select {
+    width: 100%;
   }
 
   .price-band {
