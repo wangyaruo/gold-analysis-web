@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import timezone
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -33,7 +33,7 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/market/snapshot", dependencies=[Depends(require_bearer_token)])
-async def market_snapshot(source: str | None = None) -> dict[str, Any]:
+async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
     config = load_config()
     selected_source = source or None
     try:

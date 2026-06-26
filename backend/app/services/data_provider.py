@@ -27,10 +27,10 @@ class PriceProvider:
     def prices(self) -> list[float]:
         return self.price_history()
 
-    def price_history(self, source_name: str | None = None) -> list[float]:
+    def price_history(self, source_name: Optional[str] = None) -> list[float]:
         return list(self._prices_by_source.get(self._source_key(source_name), []))
 
-    async def latest_tick(self, source_name: str | None = None) -> PriceTick:
+    async def latest_tick(self, source_name: Optional[str] = None) -> PriceTick:
         history_key = self._source_key(source_name)
         source_config = self.source_config(source_name)
         try:
@@ -74,7 +74,7 @@ class PriceProvider:
 
         raise MarketDataError(f"failed to fetch market data after {max_attempts} attempts: {last_error}")
 
-    def source_config(self, source_name: str | None = None) -> dict[str, Any]:
+    def source_config(self, source_name: Optional[str] = None) -> dict[str, Any]:
         sources = self.config.get("data_sources", {})
         selected = source_name or sources.get("active", "demo")
         price_sources = sources.get("price", {})
@@ -87,7 +87,7 @@ class PriceProvider:
     def _active_source_config(self) -> dict[str, Any]:
         return self.source_config()
 
-    def _source_key(self, source_name: str | None = None) -> str:
+    def _source_key(self, source_name: Optional[str] = None) -> str:
         return self.source_config(source_name).get("_key", source_name or "demo")
 
     def fallback_source_config(self) -> Optional[dict[str, Any]]:
