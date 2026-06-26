@@ -1,4 +1,21 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+function resolveApiBaseUrl() {
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL
+  }
+
+  if (typeof window === 'undefined') {
+    return 'http://127.0.0.1:8318'
+  }
+
+  const { protocol, hostname } = window.location
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://127.0.0.1:8318'
+  }
+
+  return `${protocol}//${hostname}:8318`
+}
+
+const API_BASE_URL = resolveApiBaseUrl()
 const API_TOKEN = import.meta.env.VITE_API_TOKEN || 'change-me-local-token'
 
 async function request(path, options = {}) {
