@@ -83,6 +83,80 @@ npm run dev
 
 默认开发 token 为 `change-me-local-token`，仅用于本地。生产环境必须设置 `API_AUTH_TOKEN`。
 
+## 服务器运行
+
+当前服务器用于自动部署和公网访问。密码、API Key、Token 等敏感信息不要写入仓库，应通过服务器环境变量或部署平台 secret 管理。
+
+### 访问地址
+
+- Frontend: `http://154.219.120.25:5178/`
+- Backend API docs: `http://154.219.120.25:8318/docs`
+- Backend health: `http://154.219.120.25:8318/api/health`
+
+### SSH 登录
+
+```bash
+ssh root@154.219.120.25
+cd /root/gold-analysis-web
+```
+
+### 自动部署
+
+服务器侧自动部署脚本位于 `/root/gold-analysis-web/deploy.sh`。推送到远程 `main` 后，服务器 webhook 会拉取最新代码、重新构建前端，并重启服务。
+
+手动触发一次部署：
+
+```bash
+ssh root@154.219.120.25
+cd /root/gold-analysis-web
+./deploy.sh
+```
+
+当前服务器端口约定：
+
+- 前端静态服务：`5178`
+- 后端 FastAPI 服务：`8318`
+- 旧前端端口 `5173` 已停用，不应再作为访问入口。
+
+### 服务器排查命令
+
+查看端口监听：
+
+```bash
+ss -ltnp | grep -E ':5178|:8318'
+```
+
+查看服务进程：
+
+```bash
+ps -ww -fp "$(cat backend.pid)" "$(cat frontend.pid)"
+pgrep -af "uvicorn backend.app.main:app|http.server 5178"
+```
+
+查看部署和运行日志：
+
+```bash
+tail -f deploy.log
+tail -f backend.log
+tail -f frontend.log
+tail -f webhook.log
+```
+
+本机验证服务：
+
+```bash
+curl -sS http://127.0.0.1:5178/
+curl -sS http://127.0.0.1:8318/api/health
+```
+
+验证需要认证的 API 时，使用服务器环境中的真实 Token：
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $API_AUTH_TOKEN" \
+  http://127.0.0.1:8318/api/market/snapshot
+```
+
 ## 验证
 
 ```bash
