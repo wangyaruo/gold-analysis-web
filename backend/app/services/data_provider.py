@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -120,7 +122,7 @@ class PriceProvider:
         endpoint = source_config["endpoint"]
         api_key_env = source_config.get("api_key_env") or ""
         api_key = os.getenv(api_key_env) if api_key_env else None
-        headers = {}
+        headers = dict(source_config.get("headers", {}))
         if api_key:
             headers[source_config.get("auth_header", "Authorization")] = api_key
 
@@ -128,7 +130,7 @@ class PriceProvider:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.get(endpoint, headers=headers)
             response.raise_for_status()
-            payload = response.json()
+            payload = _parse_response_payload(response.text, source_config.get("response_format", "json"))
 
         price_path = source_config.get("json_paths", {}).get("price", "price")
         timestamp_path = source_config.get("json_paths", {}).get("timestamp", "timestamp")
@@ -144,6 +146,15 @@ class PriceProvider:
             timestamp=timestamp,
             source=source_config.get("name", source_config.get("type", "http")),
         )
+
+
+def _parse_response_payload(text: str, response_format: str) -> dict[str, Any]:
+    if response_format == "jsonp":
+        match = re.match(r"^[\w$]+\((.*)\)\s*;?\s*$", text.strip(), re.DOTALL)
+        if not match:
+            raise MarketDataError("invalid JSONP market data response")
+        return json.loads(match.group(1))
+    return json.loads(text)
 
 
 def _parse_timestamp(value: Any) -> datetime:

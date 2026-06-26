@@ -42,11 +42,12 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
     except MarketDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     realtime_config = config.get("realtime", {})
+    max_data_delay_seconds = _max_data_delay_seconds(realtime_config, source_config)
     validated_tick = validate_price_tick(
         tick,
         min_price=float(source_config.get("min_price", 500)),
         max_price=float(source_config.get("max_price", 8000)),
-        max_delay_seconds=int(realtime_config.get("max_data_delay_seconds", 5)),
+        max_delay_seconds=max_data_delay_seconds,
     )
 
     prices = _ensure_history(_provider.price_history(source_config.get("_key")), validated_tick.price, minimum=25)
@@ -88,14 +89,15 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
     )
     display_config = config.get("display", {})
     display_unit = f"{display_config.get('currency', 'CNY')}/{display_config.get('unit', 'g')}"
-    display_prices = _convert_prices_for_display(prices, display_config)
-    display_stop_loss = _convert_price_for_display(stop_loss.stop_loss, display_config)
+    source_unit = _source_display_unit(source_config, display_config)
+    display_prices = _convert_prices_for_display(prices, display_config, source_config)
+    display_stop_loss = _convert_price_for_display(stop_loss.stop_loss, display_config, source_config)
 
     return {
         "price": {
             "symbol": validated_tick.symbol,
             "value": validated_tick.price,
-            "unit": "USD/oz",
+            "unit": source_unit,
             "display_value": display_prices[-1],
             "display_unit": display_unit,
             "timestamp": validated_tick.timestamp.astimezone(timezone.utc).isoformat(),
@@ -115,15 +117,15 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
                 "breakout": breakout,
                 "upper_band": upper_band,
                 "lower_band": lower_band,
-                "display_upper_band": _convert_price_for_display(upper_band, display_config) if upper_band else 0.0,
-                "display_lower_band": _convert_price_for_display(lower_band, display_config) if lower_band else 0.0,
+                "display_upper_band": _convert_price_for_display(upper_band, display_config, source_config) if upper_band else 0.0,
+                "display_lower_band": _convert_price_for_display(lower_band, display_config, source_config) if lower_band else 0.0,
                 "display_unit": display_unit,
             },
         },
         "sentiment": sentiment.__dict__,
         "recommendation": recommendation.__dict__,
         "refresh_seconds": realtime_config.get("frontend_refresh_seconds", 10),
-        "max_data_delay_seconds": realtime_config.get("max_data_delay_seconds", 5),
+        "max_data_delay_seconds": max_data_delay_seconds,
     }
 
 
@@ -163,7 +165,25 @@ def _ensure_history(prices: list[float], latest_price: float, minimum: int) -> l
     return generated + prices
 
 
-def _convert_price_for_display(price: float, display_config: dict[str, Any]) -> float:
+def _max_data_delay_seconds(realtime_config: dict[str, Any], source_config: dict[str, Any]) -> int:
+    return int(source_config.get("max_data_delay_seconds", realtime_config.get("max_data_delay_seconds", 5)))
+
+
+def _convert_price_for_display(
+    price: float,
+    display_config: dict[str, Any],
+    source_config: Optional[dict[str, Any]] = None,
+) -> float:
+    source_config = source_config or {}
+    source_currency = source_config.get("currency", display_config.get("source_currency", "USD"))
+    source_unit = source_config.get("unit", display_config.get("source_unit", "oz"))
+    display_currency = display_config.get("currency", "CNY")
+    display_unit = display_config.get("unit", "g")
+
+    if source_currency == display_currency and source_unit == display_unit:
+        return round(price, 2)
+    if source_currency != "USD" or source_unit != "oz" or display_currency != "CNY" or display_unit != "g":
+        raise ValueError(f"unsupported display conversion: {source_currency}/{source_unit} to {display_currency}/{display_unit}")
     return convert_usd_oz_to_cny_g(
         price,
         usd_cny_rate=float(display_config.get("usd_cny_rate", 6.808596)),
@@ -171,8 +191,19 @@ def _convert_price_for_display(price: float, display_config: dict[str, Any]) -> 
     )
 
 
-def _convert_prices_for_display(prices: list[float], display_config: dict[str, Any]) -> list[float]:
-    return [_convert_price_for_display(price, display_config) for price in prices]
+def _convert_prices_for_display(
+    prices: list[float],
+    display_config: dict[str, Any],
+    source_config: Optional[dict[str, Any]] = None,
+) -> list[float]:
+    return [_convert_price_for_display(price, display_config, source_config) for price in prices]
+
+
+def _source_display_unit(source_config: dict[str, Any], display_config: dict[str, Any]) -> str:
+    return (
+        f"{source_config.get('currency', display_config.get('source_currency', 'USD'))}/"
+        f"{source_config.get('unit', display_config.get('source_unit', 'oz'))}"
+    )
 
 
 def _build_history(prices: list[float], display_prices: list[float]) -> list[dict[str, float]]:

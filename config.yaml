@@ -92,6 +92,29 @@ data_sources:
       timeout_seconds: 5
       min_price: 500
       max_price: 8000
+    eastmoney_au9999:
+      type: "http"
+      label: "东方财富 AU9999"
+      description: "Eastmoney AU9999 quote from the 黄金9999 page. Native CNY/g price."
+      name: "eastmoney_au9999"
+      symbol: "AU9999"
+      endpoint: "https://futsseapi.eastmoney.com/static/118_AU9999_qt?callbackName=callback&field=name,sc,dm,p,zsjd,zdf,zde,utime,o,zjsj,qrspj,h,l,mrj,mcj,vol,cclbh,zt,dt,np,wp,ccl,rz,cje,mcl,mrl,jjsj,j,lb,zf&token=1101ffec61617c99be287c1bec3085ff"
+      api_key_env: ""
+      response_format: "jsonp"
+      currency: "CNY"
+      unit: "g"
+      headers:
+        User-Agent: "Mozilla/5.0"
+        Referer: "https://quote.eastmoney.com/globalfuture/AU9999.html?jump_to_web=true"
+      json_paths:
+        price: "qt.p"
+        timestamp: "qt.utime"
+      timeout_seconds: 5
+      # AU9999 can stop updating between domestic trading sessions; keep
+      # realtime feeds at 5s, but allow this reference source a short grace.
+      max_data_delay_seconds: 900
+      min_price: 200
+      max_price: 1500
 
 retry:
   max_attempts: 3

@@ -8,7 +8,8 @@ from backend.app.services.indicators import compute_ema, compute_sma, compute_st
 from backend.app.services.pnl import calculate_pnl
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import PriceTick, validate_price_tick
-from backend.app.services.data_provider import MarketDataError, PriceProvider
+from backend.app.api import _convert_price_for_display, _max_data_delay_seconds
+from backend.app.services.data_provider import MarketDataError, PriceProvider, _parse_response_payload
 
 
 class IndicatorTests(unittest.TestCase):
@@ -60,8 +61,34 @@ class DisplayPriceTests(unittest.TestCase):
 
         self.assertAlmostEqual(result, 879.71, places=2)
 
+    def test_cny_g_source_is_not_converted_again_for_display(self):
+        result = _convert_price_for_display(
+            price=883.7,
+            display_config={"currency": "CNY", "unit": "g"},
+            source_config={"currency": "CNY", "unit": "g"},
+        )
+
+        self.assertEqual(result, 883.7)
+
+    def test_source_can_override_max_data_delay(self):
+        result = _max_data_delay_seconds(
+            realtime_config={"max_data_delay_seconds": 5},
+            source_config={"max_data_delay_seconds": 900},
+        )
+
+        self.assertEqual(result, 900)
+
 
 class PriceProviderTests(unittest.TestCase):
+    def test_parse_jsonp_market_payload(self):
+        payload = _parse_response_payload(
+            'callback({"qt":{"dm":"AU9999","p":883.7,"utime":1782459826}})',
+            "jsonp",
+        )
+
+        self.assertEqual(payload["qt"]["dm"], "AU9999")
+        self.assertEqual(payload["qt"]["p"], 883.7)
+
     def test_source_config_selects_named_source(self):
         provider = PriceProvider(
             {

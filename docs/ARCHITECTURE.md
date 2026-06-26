@@ -7,7 +7,7 @@ flowchart LR
   API --> PriceProvider["Price Provider"]
   API --> NewsProvider["News Provider"]
   PriceProvider --> Demo["Demo fallback"]
-  PriceProvider --> MarketFeeds["Yahoo Futures / Yahoo Spot / GoldAPI"]
+  PriceProvider --> MarketFeeds["Yahoo Futures / Yahoo Spot / Eastmoney AU9999 / GoldAPI"]
   NewsProvider --> DemoNews["Demo articles"]
   NewsProvider --> NewsAPI["NewsAPI"]
   API --> Indicators["SMA / EMA / Bollinger / Stop Loss"]
@@ -24,7 +24,7 @@ flowchart LR
 
 ## 实时更新
 
-前端按 `config.yaml -> realtime.frontend_refresh_seconds` 轮询，默认 10 秒。后端按 `max_data_delay_seconds` 校验数据时间戳，默认最大允许延迟 5 秒。若 API 请求失败，后端数据源使用最多 3 次指数退避重试，并记录结构化日志。
+前端按 `config.yaml -> realtime.frontend_refresh_seconds` 轮询，默认 10 秒。后端按 `max_data_delay_seconds` 校验数据时间戳，默认最大允许延迟 5 秒；特定参考源可在自身配置中覆盖该阈值。若 API 请求失败，后端数据源使用最多 3 次指数退避重试，并记录结构化日志。
 
 ## 认证
 

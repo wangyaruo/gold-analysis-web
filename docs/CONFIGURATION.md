@@ -12,13 +12,14 @@ data_sources:
 
 - `yahoo_finance`: 默认数据源，Yahoo Finance 黄金期货 `GC=F`。
 - `yahoo_finance_spot`: Yahoo Finance 现货黄金兑美元 `XAUUSD=X`，用于和期货报价交叉参考。
+- `eastmoney_au9999`: 东方财富黄金9999 `AU9999` 页面底层接口，原生人民币/克 `CNY/g` 报价。
 - `goldpriceapi`: GoldAPI XAU/USD，需要通过 `GOLD_API_KEY` 读取认证密钥。
 - `demo`: 离线参考数据源，也是外部源失败时的 fallback。
 
 前端会读取 `/api/config/public` 返回的 `data_sources.options`，在价格图表区域提供行情源选择器。切换行情源时，请求会携带 `source` 查询参数，例如：
 
 ```text
-GET /api/market/snapshot?source=yahoo_finance_spot
+GET /api/market/snapshot?source=eastmoney_au9999
 ```
 
 如果指定源请求失败，系统会按 `fallback` 配置回退到 `demo`，但响应中的 `price.requested_source` 仍保留用户选择的源，`price.source` 表示实际返回数据的源。
@@ -28,11 +29,13 @@ GET /api/market/snapshot?source=yahoo_finance_spot
 - `endpoint`: API 地址。
 - `api_key_env`: API key 的环境变量名。
 - `auth_header`: key 注入的 header 名称。
-- `response_format`: 当前实现为 JSON。
+- `response_format`: 支持 `json` 和 `jsonp`。`jsonp` 用于东方财富等 callback 包裹响应，系统会剥离 callback 后解析 JSON。
 - `json_paths`: 从响应 JSON 中读取价格和时间戳的路径。
 - `timeout_seconds`: 单次请求超时。
 - `min_price` / `max_price`: 合理价格区间校验。
 - `label` / `description`: 前端展示用名称和说明，不包含敏感信息。
+- `currency` / `unit`: 数据源原始单位。未设置时默认按 `display.source_currency/source_unit` 处理；如 `eastmoney_au9999` 设置为 `CNY/g`，前端展示不会再次换算。
+- `max_data_delay_seconds`: 可选的数据源级延迟阈值覆盖。`eastmoney_au9999` 在国内交易时段之外可能停留在最后报价，因此作为参考源允许较短宽限；默认实时源仍使用全局 5 秒阈值。
 
 ## 实时性
 
@@ -82,6 +85,7 @@ data_sources:
 
 - `GC=F` 更接近期货合约报价。
 - `XAUUSD=X` 更接近现货黄金兑美元报价。
+- `AU9999` 是上海黄金交易所相关的人民币/克报价，适合和国内金价口径交叉参考。
 - 认证源如 `goldpriceapi` 适合生产环境接入稳定授权数据。
 - `demo` 只用于开发、离线、fallback，不应用于真实交易判断。
 

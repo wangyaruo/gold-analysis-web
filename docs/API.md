@@ -36,12 +36,12 @@ Authorization: Bearer change-me-local-token
 
 可选查询参数：
 
-- `source`: 指定行情源，例如 `yahoo_finance`、`yahoo_finance_spot`、`goldpriceapi`、`demo`。不传时使用 `config.yaml` 中的 `data_sources.active`。
+- `source`: 指定行情源，例如 `yahoo_finance`、`yahoo_finance_spot`、`eastmoney_au9999`、`goldpriceapi`、`demo`。不传时使用 `config.yaml` 中的 `data_sources.active`。
 
 示例：
 
 ```http
-GET /api/market/snapshot?source=yahoo_finance_spot
+GET /api/market/snapshot?source=eastmoney_au9999
 Authorization: Bearer change-me-local-token
 ```
 
