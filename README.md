@@ -165,4 +165,22 @@ cd frontend && npm run build
 cd frontend && npm run test:e2e
 ```
 
+### 运维速查
+```bash
+#查看部署日志
+ssh root@154.219.120.25 "tail -30 /root/gold-analysis-web/deploy.log"
+
+#查看 webhook 日志
+ssh root@154.219.120.25 "tail -30 /root/gold-analysis-web/webhook.log"
+
+#手动触发部署
+ssh root@154.219.120.25 "bash /root/gold-analysis-web/deploy.sh"
+
+#重启 webhook 服务
+ssh root@154.219.120.25 "systemctl restart gold-webhook"
+
+#查看服务状态
+ssh root@154.219.120.25 "systemctl status gold-webhook"
+```
+
 更多说明见 `docs/`。
