@@ -28,19 +28,24 @@ display:
   unit: "g"
   source_currency: "USD"
   source_unit: "oz"
-  usd_cny_rate: 7.25
+  # Reference checked on 2026-06-26 from open.er-api.com latest USD rates.
+  usd_cny_rate: 6.808596
   troy_ounce_grams: 31.1034768
 
 data_sources:
-  active: "demo"
+  active: "yahoo_finance"
+  fallback: "demo"
   price:
     demo:
       type: "demo"
+      name: "reference-fallback-2026-06-26"
       symbol: "XAUUSD"
-      base_price: 2335.0
-      volatility: 6.5
+      # Reference checked on 2026-06-26: spot gold around 4018.77 USD/oz.
+      # The live Yahoo source above should be preferred whenever network works.
+      base_price: 4018.77
+      volatility: 8.0
       min_price: 500
-      max_price: 5000
+      max_price: 8000
     goldpriceapi:
       type: "http"
       endpoint: "https://www.goldapi.io/api/XAU/USD"
@@ -52,9 +57,11 @@ data_sources:
         timestamp: "timestamp"
       timeout_seconds: 5
       min_price: 500
-      max_price: 5000
+      max_price: 8000
     yahoo_finance:
       type: "http"
+      name: "yahoo_finance_gc_f"
+      symbol: "GC=F"
       endpoint: "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
       api_key_env: ""
       response_format: "json"
@@ -63,7 +70,7 @@ data_sources:
         timestamp: "chart.result.0.meta.regularMarketTime"
       timeout_seconds: 5
       min_price: 500
-      max_price: 5000
+      max_price: 8000
 
 retry:
   max_attempts: 3

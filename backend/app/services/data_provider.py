@@ -4,7 +4,7 @@ import asyncio
 import math
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -29,7 +29,13 @@ class PriceProvider:
 
     async def latest_tick(self) -> PriceTick:
         source_config = self._active_source_config()
-        tick = await self._fetch_with_retry(source_config)
+        try:
+            tick = await self._fetch_with_retry(source_config)
+        except Exception:
+            fallback_config = self.fallback_source_config()
+            if not fallback_config:
+                raise
+            tick = await self._fetch_with_retry(fallback_config)
         self._prices.append(tick.price)
         self._prices = self._prices[-240:]
         return tick
@@ -39,7 +45,7 @@ class PriceProvider:
         max_attempts = int(retry_config.get("max_attempts", 3))
         base_delay = float(retry_config.get("base_delay_seconds", 0.2))
         multiplier = float(retry_config.get("multiplier", 2))
-        last_error: Exception | None = None
+        last_error: Optional[Exception] = None
 
         for attempt in range(1, max_attempts + 1):
             try:
@@ -68,9 +74,19 @@ class PriceProvider:
             raise MarketDataError(f"unknown active price source: {active}")
         return dict(price_sources[active])
 
+    def fallback_source_config(self) -> Optional[dict[str, Any]]:
+        sources = self.config.get("data_sources", {})
+        fallback = sources.get("fallback")
+        if not fallback:
+            return None
+        price_sources = sources.get("price", {})
+        if fallback not in price_sources:
+            raise MarketDataError(f"unknown fallback price source: {fallback}")
+        return dict(price_sources[fallback])
+
     def _fetch_demo(self, source_config: dict[str, Any]) -> PriceTick:
-        base_price = float(source_config.get("base_price", 2335.0))
-        volatility = float(source_config.get("volatility", 6.5))
+        base_price = float(source_config.get("base_price", 4018.77))
+        volatility = float(source_config.get("volatility", 8.0))
         self._demo_counter += 1
         drift = math.sin(self._demo_counter / 3) * volatility
         micro_move = math.cos(self._demo_counter / 5) * (volatility / 2)
@@ -79,7 +95,7 @@ class PriceProvider:
             symbol=source_config.get("symbol", "XAUUSD"),
             price=price,
             timestamp=datetime.now(timezone.utc),
-            source="demo",
+            source=source_config.get("name", "demo"),
         )
 
     async def _fetch_http(self, source_config: dict[str, Any]) -> PriceTick:
@@ -108,7 +124,7 @@ class PriceProvider:
             symbol=source_config.get("symbol", "XAUUSD"),
             price=float(price),
             timestamp=timestamp,
-            source=source_config.get("type", "http"),
+            source=source_config.get("name", source_config.get("type", "http")),
         )
 
 

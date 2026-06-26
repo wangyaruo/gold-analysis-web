@@ -43,7 +43,7 @@ display:
   unit: "g"
   source_currency: "USD"
   source_unit: "oz"
-  usd_cny_rate: 7.25
+  usd_cny_rate: 6.808596
   troy_ounce_grams: 31.1034768
 ```
 
@@ -53,7 +53,19 @@ display:
 CNY/g = USD/oz * usd_cny_rate / troy_ounce_grams
 ```
 
-`usd_cny_rate` 当前是配置值，便于离线和测试环境稳定运行。接入生产环境时可扩展为实时汇率数据源。
+`usd_cny_rate` 当前是配置值，便于离线和测试环境稳定运行。默认值 `6.808596` 于 2026-06-26 参考公开汇率接口更新。接入生产环境时可扩展为实时汇率数据源。
+
+## 行情数据优先级
+
+默认配置优先使用 Yahoo Finance 黄金期货 `GC=F`：
+
+```yaml
+data_sources:
+  active: "yahoo_finance"
+  fallback: "demo"
+```
+
+当服务器无法访问 Yahoo 或解析失败时，系统自动回退到 `demo`。当前 `demo` 不再使用旧的 2335 USD/oz，而是按 2026-06-26 公开行情参考值设置为 `4018.77 USD/oz`，避免无网环境展示明显过期价格。
 
 ## 止损公式
 

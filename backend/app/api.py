@@ -41,7 +41,7 @@ async def market_snapshot() -> dict[str, Any]:
     validated_tick = validate_price_tick(
         tick,
         min_price=float(source_config.get("min_price", 500)),
-        max_price=float(source_config.get("max_price", 5000)),
+        max_price=float(source_config.get("max_price", 8000)),
         max_delay_seconds=int(realtime_config.get("max_data_delay_seconds", 5)),
     )
 
@@ -160,7 +160,7 @@ def _ensure_history(prices: list[float], latest_price: float, minimum: int) -> l
 def _convert_price_for_display(price: float, display_config: dict[str, Any]) -> float:
     return convert_usd_oz_to_cny_g(
         price,
-        usd_cny_rate=float(display_config.get("usd_cny_rate", 7.25)),
+        usd_cny_rate=float(display_config.get("usd_cny_rate", 6.808596)),
         troy_ounce_grams=float(display_config.get("troy_ounce_grams", 31.1034768)),
     )
 

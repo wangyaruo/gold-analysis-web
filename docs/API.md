@@ -52,7 +52,7 @@ Authorization: Bearer change-me-local-token
       "indicator_type": "SMA",
       "period": 20,
       "multiplier": 2,
-      "indicator_value": 2335.2,
+      "indicator_value": 4015.2,
       "volatility": 5.4,
       "stop_loss": 2324.4,
       "display_stop_loss": 541.68,

@@ -73,7 +73,7 @@ async function refreshSnapshot() {
     connected.value = true
     lastUpdated.value = new Date()
     nextRefreshAt.value = new Date(Date.now() + refreshSeconds.value * 1000)
-    await updatePnl()
+    await updatePnl({ silent: true })
   } catch (error) {
     connected.value = false
     errorMessage.value = error.message
@@ -82,13 +82,19 @@ async function refreshSnapshot() {
   }
 }
 
-async function updatePnl() {
+async function updatePnl(options = {}) {
   if (!currentPrice.value) return
-  pnl.value = await calculatePnl({
-    buy_price: Number(portfolio.buy_price),
-    quantity: Number(portfolio.quantity),
-    current_price: currentPrice.value,
-  })
+  try {
+    pnl.value = await calculatePnl({
+      buy_price: Number(portfolio.buy_price),
+      quantity: Number(portfolio.quantity),
+      current_price: currentPrice.value,
+    })
+  } catch (error) {
+    if (!options.silent) {
+      errorMessage.value = error.message
+    }
+  }
 }
 
 function scheduleRefresh() {

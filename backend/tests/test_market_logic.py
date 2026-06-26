@@ -7,6 +7,7 @@ from backend.app.services.indicators import compute_ema, compute_sma, compute_st
 from backend.app.services.pnl import calculate_pnl
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import PriceTick, validate_price_tick
+from backend.app.services.data_provider import PriceProvider
 
 
 class IndicatorTests(unittest.TestCase):
@@ -48,6 +49,41 @@ class DisplayPriceTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(result, 545.44, places=2)
+
+    def test_convert_current_reference_gold_price_to_cny_g(self):
+        result = convert_usd_oz_to_cny_g(
+            price_usd_oz=4018.77,
+            usd_cny_rate=6.808596,
+            troy_ounce_grams=31.1034768,
+        )
+
+        self.assertAlmostEqual(result, 879.71, places=2)
+
+
+class PriceProviderTests(unittest.TestCase):
+    def test_active_source_falls_back_to_demo_when_configured(self):
+        provider = PriceProvider(
+            {
+                "data_sources": {
+                    "active": "yahoo_finance",
+                    "fallback": "demo",
+                    "price": {
+                        "yahoo_finance": {"type": "http"},
+                        "demo": {
+                            "type": "demo",
+                            "symbol": "XAUUSD",
+                            "base_price": 4018.77,
+                            "volatility": 0,
+                        },
+                    },
+                }
+            }
+        )
+
+        result = provider.fallback_source_config()
+
+        self.assertEqual(result["type"], "demo")
+        self.assertEqual(result["base_price"], 4018.77)
 
 
 class SentimentTests(unittest.TestCase):
