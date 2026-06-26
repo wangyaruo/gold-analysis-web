@@ -49,19 +49,19 @@ python3 -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8318
 ```bash
 cd /Users/wangyaruo/Desktop/卡卡/gold-analysis-web/frontend
 npm install
-npm run dev -- --port 5173
+npm run dev -- --port 5178
 ```
 
 打开页面：
 
-- Frontend: `http://127.0.0.1:5173/`
+- Frontend: `http://127.0.0.1:5178/`
 - Backend API docs: `http://127.0.0.1:8318/docs`
 
 停止服务：
 
 ```bash
 lsof -ti tcp:8318 | xargs kill
-lsof -ti tcp:5173 | xargs kill
+lsof -ti tcp:5178 | xargs kill
 ```
 
 ### 规范启动
