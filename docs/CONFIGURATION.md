@@ -35,7 +35,7 @@ GET /api/market/snapshot?source=eastmoney_au9999
 - `min_price` / `max_price`: 合理价格区间校验。
 - `label` / `description`: 前端展示用名称和说明，不包含敏感信息。
 - `currency` / `unit`: 数据源原始单位。未设置时默认按 `display.source_currency/source_unit` 处理；如 `eastmoney_au9999` 设置为 `CNY/g`，前端展示不会再次换算。
-- `max_data_delay_seconds`: 可选的数据源级延迟阈值覆盖。`eastmoney_au9999` 在国内交易时段之外可能停留在最后报价，因此作为参考源允许较短宽限；默认实时源仍使用全局 5 秒阈值。
+- `max_data_delay_seconds`: 可选的数据源级延迟阈值覆盖。`eastmoney_au9999` 在国内交易时段之外可能停留在最后报价，因此作为参考源允许日内宽限；默认实时源仍使用全局 5 秒阈值。
 
 ## 实时性
 

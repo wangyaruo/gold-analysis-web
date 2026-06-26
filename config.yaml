@@ -111,8 +111,8 @@ data_sources:
         timestamp: "qt.utime"
       timeout_seconds: 5
       # AU9999 can stop updating between domestic trading sessions; keep
-      # realtime feeds at 5s, but allow this reference source a short grace.
-      max_data_delay_seconds: 900
+      # realtime feeds at 5s, but allow this reference source an intraday grace.
+      max_data_delay_seconds: 43200
       min_price: 200
       max_price: 1500
 
