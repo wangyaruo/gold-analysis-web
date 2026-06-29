@@ -47,6 +47,17 @@ export function getMarketSnapshot(source) {
   return request(`/api/market/snapshot${query ? `?${query}` : ''}`)
 }
 
+export function getKlines(period) {
+  const params = new URLSearchParams()
+  if (period) params.set('period', period)
+  const query = params.toString()
+  return request(`/api/market/klines${query ? `?${query}` : ''}`)
+}
+
+export function getPeriods() {
+  return request('/api/market/periods')
+}
+
 export function calculatePnl(payload) {
   return request('/api/portfolio/pnl', {
     method: 'POST',

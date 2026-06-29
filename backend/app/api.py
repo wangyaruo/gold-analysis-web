@@ -20,6 +20,7 @@ from backend.app.services.news_provider import fetch_news_articles
 from backend.app.services.pnl import calculate_pnl
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import validate_price_tick
+from backend.app.services.klines import get_klines, supported_periods
 
 
 router = APIRouter()
@@ -127,6 +128,21 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
         "refresh_seconds": realtime_config.get("frontend_refresh_seconds", 10),
         "max_data_delay_seconds": max_data_delay_seconds,
     }
+
+
+@router.get("/market/klines", dependencies=[Depends(require_bearer_token)])
+async def market_klines(period: str = "1day") -> dict[str, Any]:
+    try:
+        return await get_klines(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"klines fetch failed: {exc}") from exc
+
+
+@router.get("/market/periods", dependencies=[Depends(require_bearer_token)])
+async def market_periods() -> dict[str, Any]:
+    return {"periods": supported_periods()}
 
 
 @router.post("/portfolio/pnl", dependencies=[Depends(require_bearer_token)])

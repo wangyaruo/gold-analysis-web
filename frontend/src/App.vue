@@ -18,7 +18,7 @@ import {
 } from 'lucide-vue-next'
 import PriceChart from './components/PriceChart.vue'
 import SentimentGauge from './components/SentimentGauge.vue'
-import {calculatePnl, getMarketSnapshot, getPublicConfig} from './api'
+import {calculatePnl, getKlines, getMarketSnapshot, getPublicConfig} from './api'
 
 const snapshot = ref(null)
 const publicConfig = ref(null)
@@ -30,6 +30,18 @@ const nextRefreshAt = ref(null)
 const timer = ref(null)
 const pnl = ref(null)
 const selectedSource = ref('')
+const klines = ref([])
+const klinesLoading = ref(false)
+const selectedPeriod = ref('1day')
+const periodOptions = [
+  {key: '1min', label: '分线'},
+  {key: '1h', label: '时线'},
+  {key: '5h', label: '5小时线'},
+  {key: '1day', label: '日线'},
+  {key: '1month', label: '月线'},
+]
+const klineUnit = ref('CNY/g')
+const klineTimer = ref(null)
 const portfolio = reactive({
   buy_price: 540,
   quantity: 1,
@@ -151,6 +163,39 @@ async function loadConfig() {
   selectedSource.value = publicConfig.value.data_sources?.active || sourceOptions.value[0]?.key || ''
 }
 
+async function loadKlines() {
+  klinesLoading.value = true
+  try {
+    const data = await getKlines(selectedPeriod.value)
+    klines.value = data.candles || []
+    klineUnit.value = data.display_unit || 'CNY/g'
+    syncLastCandle()
+  } catch (error) {
+    klines.value = []
+  } finally {
+    klinesLoading.value = false
+  }
+}
+
+async function selectPeriod(key) {
+  if (selectedPeriod.value === key) return
+  selectedPeriod.value = key
+  await loadKlines()
+}
+
+// 用实时当前价更新最后一根K线的收盘/高/低,让图表跟着价格实时跳动
+function syncLastCandle() {
+  const price = currentPrice.value
+  if (!price || !klines.value.length) return
+  const arr = klines.value.slice()
+  const last = {...arr[arr.length - 1]}
+  last.close = Number(price)
+  last.high = Math.max(Number(last.high), Number(price))
+  last.low = Math.min(Number(last.low), Number(price))
+  arr[arr.length - 1] = last
+  klines.value = arr
+}
+
 async function refreshSnapshot() {
   loading.value = true
   errorMessage.value = ''
@@ -159,6 +204,7 @@ async function refreshSnapshot() {
     connected.value = true
     lastUpdated.value = new Date()
     nextRefreshAt.value = new Date(Date.now() + refreshSeconds.value * 1000)
+    syncLastCandle()
     await updatePnl({silent: true})
   } catch (error) {
     connected.value = false
@@ -185,6 +231,8 @@ async function updatePnl(options = {}) {
 
 function scheduleRefresh() {
   timer.value = window.setInterval(refreshSnapshot, refreshSeconds.value * 1000)
+  // K线历史每 60 秒整体重拉一次(后端有缓存,不会超额度);最新一根靠 syncLastCandle 实时跟价
+  klineTimer.value = window.setInterval(loadKlines, 60 * 1000)
 }
 
 onMounted(async () => {
@@ -194,11 +242,13 @@ onMounted(async () => {
     errorMessage.value = error.message
   }
   await refreshSnapshot()
+  await loadKlines()
   scheduleRefresh()
 })
 
 onUnmounted(() => {
   if (timer.value) window.clearInterval(timer.value)
+  if (klineTimer.value) window.clearInterval(klineTimer.value)
 })
 </script>
 
@@ -303,9 +353,19 @@ onUnmounted(() => {
           <div class="card-head">
             <div>
               <p class="card-label">价格图表</p>
-              <h2 class="card-title">折线 + K线视图</h2>
+              <h2 class="card-title">K线 · {{ periodOptions.find(p => p.key === selectedPeriod)?.label }}</h2>
             </div>
             <div class="chart-actions">
+              <div class="period-tabs">
+                <button
+                  v-for="p in periodOptions"
+                  :key="p.key"
+                  type="button"
+                  class="period-tab"
+                  :class="{ active: selectedPeriod === p.key }"
+                  @click="selectPeriod(p.key)"
+                >{{ p.label }}</button>
+              </div>
               <label v-if="sourceOptions.length" class="select-pill">
                 <Database :size="15"/>
                 <select v-model="selectedSource" data-testid="price-source-select" @change="refreshSnapshot">
@@ -314,10 +374,9 @@ onUnmounted(() => {
                   </option>
                 </select>
               </label>
-              <span class="chart-icon-btn"><LineChart :size="16"/></span>
             </div>
           </div>
-          <PriceChart :history="snapshot?.history || []" :stop-loss="stopLoss" :unit="displayUnit"/>
+          <PriceChart :candles="klines" :history="snapshot?.history || []" :stop-loss="stopLoss" :unit="klineUnit" :period="selectedPeriod"/>
         </article>
 
         <article class="card stoploss-card">
