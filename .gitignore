@@ -4,9 +4,9 @@ dist/
 __pycache__/
 *.pyc
 .env
+.idea/
 playwright-report/
 test-results/
-.idea/*.log
 *.pid
 *.bak-*
 *.bak
