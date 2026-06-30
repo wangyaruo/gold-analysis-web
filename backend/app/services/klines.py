@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -14,24 +14,23 @@ _TD_ENDPOINT = "https://api.twelvedata.com/time_series"
 _TD_SYMBOL = "XAU/USD"
 
 # period -> (twelve_data interval, outputsize, cache_ttl_seconds, aggregate_every)
-# aggregate_every>1 means: fetch `interval` bars then merge every N into one bar (for 5h).
+# aggregate_every>1 means: fetch `interval` bars then merge every N into one bar.
 _PERIODS: dict[str, dict[str, Any]] = {
-    "1min": {"interval": "1min", "outputsize": 120, "ttl": 30, "agg": 1},
-    "1h": {"interval": "1h", "outputsize": 120, "ttl": 300, "agg": 1},
-    "5h": {"interval": "1h", "outputsize": 150, "ttl": 600, "agg": 5},
-    "1day": {"interval": "1day", "outputsize": 30, "ttl": 3600, "agg": 1},
-    "1month": {"interval": "1month", "outputsize": 12, "ttl": 21600, "agg": 1},
+    # 加载更多历史供 dataZoom 滑块拖动浏览; 前端默认窗口=约10刻度宽, 拖动滚历史
+    "1min": {"interval": "1min", "outputsize": 480, "ttl": 30, "agg": 1},     # 约8小时分钟线
+    "1h": {"interval": "1h", "outputsize": 120, "ttl": 300, "agg": 1},        # 约5天小时线
+    "1day": {"interval": "1day", "outputsize": 90, "ttl": 3600, "agg": 1},    # 约3个月日线
+    "1month": {"interval": "1month", "outputsize": 36, "ttl": 21600, "agg": 1},  # 3年月线
 }
 
-# Simple in-memory cache: period -> (expires_at_epoch, payload)
-_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+# Simple in-memory cache: (source, period) -> (expires_at_epoch, payload)
+_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
 
 def supported_periods() -> list[dict[str, str]]:
     labels = {
         "1min": "分线",
         "1h": "时线",
-        "5h": "5小时线",
         "1day": "日线",
         "1month": "月线",
     }
@@ -132,12 +131,71 @@ def _convert_ohlc(bars: list[dict[str, Any]], display_config: dict[str, Any]) ->
     return out
 
 
-async def get_klines(period: str) -> dict[str, Any]:
+def _period_delta(period: str) -> timedelta:
+    if period == "1min":
+        return timedelta(minutes=1)
+    if period == "1h":
+        return timedelta(hours=1)
+    if period == "1month":
+        return timedelta(days=30)
+    return timedelta(days=1)
+
+
+def _ensure_source_history(prices: list[float], latest_price: float, minimum: int = 25) -> list[float]:
+    if len(prices) >= minimum:
+        return prices
+    seed = prices[0] if prices else latest_price
+    generated = [round(seed - ((minimum - index) * 0.15), 2) for index in range(minimum - len(prices))]
+    return generated + prices
+
+
+def _build_source_history_candles(prices: list[float], period: str) -> list[dict[str, Any]]:
+    spec = _PERIODS[period]
+    selected = prices[-int(spec["outputsize"]) :]
+    step = _period_delta(period)
+    start = datetime.now() - (step * max(len(selected) - 1, 0))
+    candles = []
+    for index, price in enumerate(selected):
+        current_time = start + (step * index)
+        value = round(float(price), 3)
+        candles.append(
+            {
+                "time": current_time.replace(microsecond=0).isoformat(),
+                "open": value,
+                "high": value,
+                "low": value,
+                "close": value,
+            }
+        )
+    return candles
+
+
+async def _get_source_history_klines(period: str, source: str, provider: Any, source_config: dict[str, Any]) -> dict[str, Any]:
+    tick = await provider.latest_tick(source)
+    prices = _ensure_source_history(provider.price_history(source), tick.price)
+    display_unit = f"{source_config.get('currency', 'CNY')}/{source_config.get('unit', 'g')}"
+    candles = _build_source_history_candles(prices, period)
+    return {
+        "period": period,
+        "source": source,
+        "display_unit": display_unit,
+        "count": len(candles),
+        "candles": candles,
+    }
+
+
+async def get_klines(period: str, source: Optional[str] = None, provider: Any = None) -> dict[str, Any]:
     if period not in _PERIODS:
         raise ValueError(f"unsupported period: {period}")
 
+    if source and provider is not None:
+        source_config = provider.source_config(source)
+        if source_config.get("kline_mode") == "history":
+            return await _get_source_history_klines(period, source, provider, source_config)
+
     now = time.time()
-    cached = _cache.get(period)
+    cache_key = (source or "twelve_data", period)
+    cached = _cache.get(cache_key)
     if cached and cached[0] > now:
         return cached[1]
 
@@ -155,9 +213,10 @@ async def get_klines(period: str) -> dict[str, Any]:
 
     payload = {
         "period": period,
+        "source": "twelve_data",
         "display_unit": display_unit,
         "count": len(candles),
         "candles": candles,
     }
-    _cache[period] = (now + float(spec["ttl"]), payload)
+    _cache[cache_key] = (now + float(spec["ttl"]), payload)
     return payload

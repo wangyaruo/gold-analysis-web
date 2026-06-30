@@ -47,9 +47,10 @@ export function getMarketSnapshot(source) {
   return request(`/api/market/snapshot${query ? `?${query}` : ''}`)
 }
 
-export function getKlines(period) {
+export function getKlines(period, source) {
   const params = new URLSearchParams()
   if (period) params.set('period', period)
+  if (source) params.set('source', source)
   const query = params.toString()
   return request(`/api/market/klines${query ? `?${query}` : ''}`)
 }

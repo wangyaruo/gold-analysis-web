@@ -9,6 +9,14 @@ import {
   MarkLineComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import {
+  buildAxisLabelLookup,
+  buildYAxisScale,
+  buildYAxisScaleForRange,
+  formatDataZoomLabel,
+  formatFullTime,
+  formatYAxisValue,
+} from '../utils/chartAxis.js'
 
 echarts.use([
   CandlestickChart,
@@ -28,10 +36,15 @@ const props = defineProps({
   period: { type: String, default: '1day' },
 })
 
+// 默认可见窗口(=约10个刻度宽). 月线放宽到 12 条, 避免粗略 30 天数据造成自然月标签重复。
+const DEFAULT_WINDOW = { '1min': 150, '1h': 10, '1day': 10, '1month': 12 }
+
 const chartContainer = ref(null)
 let chartInstance = null
+// 当前缩放窗口(数据索引), null 表示用默认(贴最右/最新)
+let zoomStart = null
+let zoomEnd = null
 
-// 短周期(分/时/5时)波动极小、价格颗粒粗,用折线更耐看;长周期(日/月)波动大,用蜡烛更专业
 const useCandle = computed(() => props.period === '1day' || props.period === '1month')
 
 const bars = computed(() => {
@@ -54,22 +67,44 @@ const bars = computed(() => {
     .filter((c) => Number.isFinite(c.close))
 })
 
-function fmtTime(raw) {
-  if (!raw) return ''
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return String(raw)
-  const p = (n) => String(n).padStart(2, '0')
-  if (props.period === '1month') return `${d.getFullYear()}-${p(d.getMonth() + 1)}`
-  if (props.period === '1day') return `${p(d.getMonth() + 1)}-${p(d.getDate())}`
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+// 默认窗口的起止索引(贴最新)
+function defaultRange(n) {
+  const win = DEFAULT_WINDOW[props.period] || 10
+  const end = n - 1
+  const start = Math.max(0, end - win + 1)
+  return { start, end }
+}
+
+function buildXAxisLabels(data, startIndex, endIndex) {
+  const lookup = buildAxisLabelLookup(data, props.period, { startIndex, endIndex })
+  return {
+    showTimeTick: (_index, value) => lookup.values.has(value),
+    formatTick: (value, index) => lookup.textByValue.get(value) || lookup.labels[index] || '',
+  }
 }
 
 const buildOption = () => {
   const data = bars.value
-  const categories = data.map((c) => fmtTime(c.time))
+  const n = data.length
+  const categories = data.map((c) => formatFullTime(c.time, props.period))
   const ohlc = data.map((c) => [c.open, c.close, c.low, c.high])
   const closeLine = data.map((c) => c.close)
   const decimals = useCandle.value ? 2 : 3
+
+  // 可见窗口: 优先用用户拖动后的, 否则默认贴最新
+  let vs = zoomStart
+  let ve = zoomEnd
+  if (vs == null || ve == null) {
+    const r = defaultRange(n)
+    vs = r.start
+    ve = r.end
+  }
+  vs = Math.max(0, Math.min(vs, n - 1))
+  ve = Math.max(vs, Math.min(ve, n - 1))
+  const yAxisScale = buildYAxisScaleForRange(data, vs, ve, props.stopLoss)
+  const startPct = n > 1 ? (vs / (n - 1)) * 100 : 0
+  const endPct = n > 1 ? (ve / (n - 1)) * 100 : 100
+  const { showTimeTick, formatTick } = buildXAxisLabels(data, vs, ve)
 
   const markLine = props.stopLoss
     ? {
@@ -91,12 +126,14 @@ const buildOption = () => {
     if (!k) {
       const p0 = params.find((p) => p.seriesName === '收盘') || params[0]
       const v = Array.isArray(p0.data) ? p0.data[1] : p0.data
-      return `<div style="font-weight:600;margin-bottom:3px">${p0.axisValue}</div>
+      const label = formatFullTime(data[p0.dataIndex]?.time || p0.axisValue, props.period)
+      return `<div style="font-weight:600;margin-bottom:3px">${label}</div>
         <div>价格 <b>${Number(v).toFixed(decimals)}</b> ${props.unit}</div>`
     }
     const [open, close, low, high] = k.data.slice(1)
     const color = close >= open ? '#e23b3b' : '#1aa260'
-    return `<div style="font-weight:600;margin-bottom:4px">${k.axisValue}</div>
+    const label = formatFullTime(data[k.dataIndex]?.time || k.axisValue, props.period)
+    return `<div style="font-weight:600;margin-bottom:4px">${label}</div>
       <div>开 <b>${open.toFixed(decimals)}</b></div>
       <div>高 <b>${high.toFixed(decimals)}</b></div>
       <div>低 <b>${low.toFixed(decimals)}</b></div>
@@ -138,10 +175,8 @@ const buildOption = () => {
   }
 
   return {
-    animation: true,
-    animationDuration: 600,
-    animationEasing: 'cubicOut',
-    grid: { left: 8, right: 58, top: 16, bottom: 56, containLabel: true },
+    animation: false,
+    grid: { left: 8, right: 58, top: 16, bottom: 64, containLabel: true },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross', label: { backgroundColor: '#c79a2e' } },
@@ -156,30 +191,58 @@ const buildOption = () => {
       data: categories,
       boundaryGap: true,
       axisLine: { lineStyle: { color: '#e5ddc6' } },
-      axisLabel: { color: '#9b8b63', fontSize: 11, hideOverlap: true },
-      axisTick: { show: false },
+	      axisLabel: {
+	        color: '#9b8b63',
+	        fontSize: 11,
+	        interval: showTimeTick,
+	        hideOverlap: false,
+	        showMinLabel: true,
+	        showMaxLabel: true,
+	        margin: 10,
+	        formatter: formatTick,
+	      },
+      axisTick: {
+        show: true,
+        alignWithLabel: true,
+        interval: showTimeTick,
+        length: 4,
+        lineStyle: { color: '#d8ca9e' },
+      },
     },
     yAxis: {
-      scale: true,
+      min: yAxisScale.min,
+      max: yAxisScale.max,
+      interval: yAxisScale.interval,
+      splitNumber: yAxisScale.splitNumber,
+      scale: false,
       position: 'right',
       axisLine: { show: false },
       axisLabel: {
         color: '#9b8b63',
         fontSize: 11,
-        formatter: (v) => (useCandle.value ? v.toFixed(0) : v.toFixed(2)),
+        formatter: (v) => formatYAxisValue(v, yAxisScale.interval),
       },
       splitLine: { lineStyle: { color: '#f0ebdd', type: 'dashed' } },
     },
     dataZoom: [
-      { type: 'inside', start: 0, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
+      { type: 'inside', start: startPct, end: endPct, zoomOnMouseWheel: true, moveOnMouseMove: true },
       {
         type: 'slider',
-        height: 18,
-        bottom: 16,
+        height: 20,
+        bottom: 14,
+        start: startPct,
+        end: endPct,
         borderColor: '#e8d9b0',
-        fillerColor: 'rgba(212,167,44,0.12)',
+        fillerColor: 'rgba(212,167,44,0.14)',
         handleStyle: { color: '#d4a72c' },
+        moveHandleStyle: { color: '#d4a72c' },
         dataBackground: { lineStyle: { color: '#d4a72c' }, areaStyle: { color: 'rgba(212,167,44,0.15)' } },
+        selectedDataBackground: { lineStyle: { color: '#c79a2e' }, areaStyle: { color: 'rgba(212,167,44,0.25)' } },
+        labelFormatter: (value) => {
+          const index = Math.round(Number(value))
+          const point = index >= 0 && index < bars.value.length ? bars.value[index] : null
+          return point ? formatDataZoomLabel(point.time, props.period) : ''
+        },
         textStyle: { color: '#9b8b63', fontSize: 10 },
       },
     ],
@@ -192,6 +255,37 @@ const render = () => {
   chartInstance.setOption(buildOption(), true)
 }
 
+// 拖动/缩放滑块: 记录可见窗口索引, 并按可见区间重算纵轴
+const onDataZoom = () => {
+  if (!chartInstance) return
+  const opt = chartInstance.getOption()
+  const dz = (opt.dataZoom || [])[0]
+  if (!dz) return
+  const n = bars.value.length
+  if (n < 1) return
+  const sPct = Number(dz.start ?? 0)
+  const ePct = Number(dz.end ?? 100)
+  zoomStart = Math.round((sPct / 100) * (n - 1))
+  zoomEnd = Math.round((ePct / 100) * (n - 1))
+  const { showTimeTick, formatTick } = buildXAxisLabels(bars.value, zoomStart, zoomEnd)
+
+  // 拖动后同步更新可见窗口内的 X/Y 轴刻度, 不重置 dataZoom 本身。
+  const y = buildYAxisScaleForRange(bars.value, zoomStart, zoomEnd, props.stopLoss)
+  chartInstance.setOption({
+    xAxis: {
+      axisLabel: {
+        interval: showTimeTick,
+        hideOverlap: false,
+        showMinLabel: true,
+        showMaxLabel: true,
+        formatter: formatTick,
+      },
+      axisTick: { interval: showTimeTick },
+    },
+    yAxis: { min: y.min, max: y.max, interval: y.interval, splitNumber: y.splitNumber },
+  })
+}
+
 const handleResize = () => chartInstance && chartInstance.resize()
 
 onMounted(() => {
@@ -199,6 +293,7 @@ onMounted(() => {
     if (!chartContainer.value) return
     chartInstance = echarts.init(chartContainer.value, null, { renderer: 'canvas' })
     render()
+    chartInstance.on('datazoom', onDataZoom)
     window.addEventListener('resize', handleResize)
   })
 })
@@ -211,7 +306,15 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
 
-watch(() => [props.candles, props.stopLoss, props.period], () => {
+// 切换周期: 重置缩放回默认(贴最新), 再重绘
+watch(() => props.period, () => {
+  zoomStart = null
+  zoomEnd = null
+  nextTick(render)
+})
+
+// 数据/止损变化: 保持当前缩放窗口重绘
+watch(() => [props.candles, props.stopLoss], () => {
   nextTick(render)
 }, { deep: true })
 </script>

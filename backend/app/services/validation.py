@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -8,6 +9,8 @@ class PriceTick:
     price: float
     timestamp: datetime
     source: str
+    day_low: Optional[float] = None
+    day_high: Optional[float] = None
 
 
 def validate_price_tick(

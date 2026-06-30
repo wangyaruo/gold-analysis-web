@@ -93,6 +93,7 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
     source_unit = _source_display_unit(source_config, display_config)
     display_prices = _convert_prices_for_display(prices, display_config, source_config)
     display_stop_loss = _convert_price_for_display(stop_loss.stop_loss, display_config, source_config)
+    today_range = _provider.today_range(source_config.get("_key"))
 
     return {
         "price": {
@@ -105,6 +106,7 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
             "source": validated_tick.source,
             "requested_source": source_config.get("_key"),
         },
+        "today_range": _display_today_range(today_range, display_config, source_config),
         "history": _build_history(prices, display_prices),
         "indicators": {
             "stop_loss": {
@@ -131,11 +133,13 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
 
 
 @router.get("/market/klines", dependencies=[Depends(require_bearer_token)])
-async def market_klines(period: str = "1day") -> dict[str, Any]:
+async def market_klines(period: str = "1day", source: Optional[str] = None) -> dict[str, Any]:
     try:
-        return await get_klines(period)
+        return await get_klines(period, source=source, provider=_provider)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MarketDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"klines fetch failed: {exc}") from exc
 
@@ -213,6 +217,22 @@ def _convert_prices_for_display(
     source_config: Optional[dict[str, Any]] = None,
 ) -> list[float]:
     return [_convert_price_for_display(price, display_config, source_config) for price in prices]
+
+
+def _display_today_range(
+    today_range: Optional[dict[str, Any]],
+    display_config: dict[str, Any],
+    source_config: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    if not today_range:
+        return None
+    low = float(today_range["low"])
+    high = float(today_range["high"])
+    return {
+        "date": today_range.get("date"),
+        "low": _convert_price_for_display(low, display_config, source_config),
+        "high": _convert_price_for_display(high, display_config, source_config),
+    }
 
 
 def _source_display_unit(source_config: dict[str, Any], display_config: dict[str, Any]) -> str:

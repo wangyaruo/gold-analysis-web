@@ -19,6 +19,7 @@ import {
 import PriceChart from './components/PriceChart.vue'
 import SentimentGauge from './components/SentimentGauge.vue'
 import {calculatePnl, getKlines, getMarketSnapshot, getPublicConfig} from './api'
+import {buildTodayRange} from './utils/dayRange'
 
 const snapshot = ref(null)
 const publicConfig = ref(null)
@@ -32,11 +33,10 @@ const pnl = ref(null)
 const selectedSource = ref('')
 const klines = ref([])
 const klinesLoading = ref(false)
-const selectedPeriod = ref('1day')
+const selectedPeriod = ref('1min')
 const periodOptions = [
   {key: '1min', label: '分线'},
   {key: '1h', label: '时线'},
-  {key: '5h', label: '5小时线'},
   {key: '1day', label: '日线'},
   {key: '1month', label: '月线'},
 ]
@@ -56,6 +56,7 @@ const sourceUnit = computed(() => snapshot.value?.price?.unit || 'USD/oz')
 const sourceOptions = computed(() => publicConfig.value?.data_sources?.options || [])
 const priceSource = computed(() => snapshot.value?.price?.source || '--')
 const stopLoss = computed(() => snapshot.value?.indicators?.stop_loss?.display_stop_loss || snapshot.value?.indicators?.stop_loss?.stop_loss || null)
+const todayRange = computed(() => buildTodayRange(klines.value, currentPrice.value, new Date(), snapshot.value?.today_range))
 const recommendation = computed(() => snapshot.value?.recommendation || {
   action: 'hold',
   confidence: 0,
@@ -166,7 +167,7 @@ async function loadConfig() {
 async function loadKlines() {
   klinesLoading.value = true
   try {
-    const data = await getKlines(selectedPeriod.value)
+    const data = await getKlines(selectedPeriod.value, selectedSource.value)
     klines.value = data.candles || []
     klineUnit.value = data.display_unit || 'CNY/g'
     syncLastCandle()
@@ -212,6 +213,11 @@ async function refreshSnapshot() {
   } finally {
     loading.value = false
   }
+}
+
+async function refreshMarketData() {
+  await refreshSnapshot()
+  await loadKlines()
 }
 
 async function updatePnl(options = {}) {
@@ -303,6 +309,18 @@ onUnmounted(() => {
             <span class="price-value" data-testid="current-price">{{ currentPrice ? currentPrice.toFixed(2) : '--' }}</span>
             <span class="price-unit">{{ displayUnit }}</span>
           </div>
+          <div class="price-range-row" aria-label="今日价格区间">
+            <span class="price-range-chip range-low">
+              <span class="range-label">今日最低</span>
+              <strong>{{ todayRange ? todayRange.low.toFixed(2) : '--' }}</strong>
+              <span>{{ displayUnit }}</span>
+            </span>
+            <span class="price-range-chip range-high">
+              <span class="range-label">今日最高</span>
+              <strong>{{ todayRange ? todayRange.high.toFixed(2) : '--' }}</strong>
+              <span>{{ displayUnit }}</span>
+            </span>
+          </div>
           <div class="price-meta">
             <span><Clock3 :size="13"/> {{ formattedTime }}</span>
             <span>刷新间隔 {{ refreshSeconds }}s</span>
@@ -368,7 +386,7 @@ onUnmounted(() => {
               </div>
               <label v-if="sourceOptions.length" class="select-pill">
                 <Database :size="15"/>
-                <select v-model="selectedSource" data-testid="price-source-select" @change="refreshSnapshot">
+                <select v-model="selectedSource" data-testid="price-source-select" @change="refreshMarketData">
                   <option v-for="source in sourceOptions" :key="source.key" :value="source.key">
                     {{ source.label }}{{ source.requires_api_key ? ' · 需密钥' : '' }}
                   </option>

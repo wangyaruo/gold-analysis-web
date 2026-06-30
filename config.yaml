@@ -33,82 +33,54 @@ display:
   troy_ounce_grams: 31.1034768
 
 data_sources:
-  active: "twelve_data"
-  fallback: "demo"
+  active: "icbc"
+  fallback: ""
   price:
-    cngold_spot:
+    icbc:
       type: "http"
-      label: "中国黄金网 现货金价"
-      description: "中国黄金网(汇通财经)现货黄金行情，美元/盎司，后端换算人民币/克。"
-      name: "cngold_spot"
-      symbol: "XAUUSD"
-      endpoint: "https://api.jijinhao.com/quoteCenter/realTime.htm?codes=JO_92233"
+      label: "工商银行积存金"
+      description: "工商银行积存金实时主动积存价格。Native CNY/g price."
+      name: "工商银行积存金"
+      symbol: "080020000521"
+      endpoint: "https://mybank.icbc.com.cn/servlet/AsynGetDataServlet?tranCode=A00622"
       api_key_env: ""
-      response_format: "jsvar"
-      headers:
-        User-Agent: "Mozilla/5.0"
-        Referer: "https://quote.cngold.org/"
-      json_paths:
-        price: "JO_92233.q63"
-        timestamp: "JO_92233.time"
-      timeout_seconds: 8
-      max_data_delay_seconds: 43200
-      min_price: 500
-      max_price: 8000
-    twelve_data:
-      type: "http"
-      label: "Twelve Data 现货金价 XAU/USD"
-      description: "Twelve Data 授权金价接口（带 API Key），稳定实时。"
-      name: "twelve_data"
-      symbol: "XAU/USD"
-      endpoint: "https://api.twelvedata.com/price?symbol=XAU/USD"
-      api_key_env: "TWELVE_DATA_KEY"
-      auth_header: "Authorization"
-      response_format: "json"
-      headers:
-        User-Agent: "Mozilla/5.0"
-      json_paths:
-        price: "price"
-        timestamp: "timestamp"
-      timeout_seconds: 8
-      min_price: 500
-      max_price: 8000
-    demo:
-      type: "demo"
-      label: "演示参考数据"
-      description: "Offline synthetic reference data used when external sources fail."
-      name: "reference-fallback-2026-06-26"
-      symbol: "XAUUSD"
-      # Reference checked on 2026-06-26: spot gold around 4018.77 USD/oz.
-      # The live Yahoo source above should be preferred whenever network works.
-      base_price: 4018.77
-      volatility: 8.0
-      min_price: 500
-      max_price: 8000
-    eastmoney_au9999:
-      type: "http"
-      label: "东方财富 AU9999"
-      description: "Eastmoney AU9999 quote from the 黄金9999 page. Native CNY/g price."
-      name: "eastmoney_au9999"
-      symbol: "AU9999"
-      endpoint: "https://futsseapi.eastmoney.com/static/118_AU9999_qt?callbackName=callback&field=name,sc,dm,p,zsjd,zdf,zde,utime,o,zjsj,qrspj,h,l,mrj,mcj,vol,cclbh,zt,dt,np,wp,ccl,rz,cje,mcl,mrl,jjsj,j,lb,zf&token=1101ffec61617c99be287c1bec3085ff"
-      api_key_env: ""
-      response_format: "jsonp"
+      response_format: "icbc_accrual"
+      kline_mode: "history"
+      legacy_tls: true
       currency: "CNY"
       unit: "g"
       headers:
         User-Agent: "Mozilla/5.0"
-        Referer: "https://quote.eastmoney.com/globalfuture/AU9999.html?jump_to_web=true"
+        Referer: "https://mybank.icbc.com.cn/icbc/newperbank/perbank3/gold/goldaccrual_query_out.jsp"
       json_paths:
-        price: "qt.p"
-        timestamp: "qt.utime"
+        price: "latest.price"
+        timestamp: "latest.timestamp"
       timeout_seconds: 5
-      # AU9999 can stop updating between domestic trading sessions; keep
-      # realtime feeds at 5s, but allow this reference source an intraday grace.
       max_data_delay_seconds: 43200
       min_price: 200
       max_price: 1500
-
+    jdjygold_zheshang:
+      type: "http"
+      label: "浙商银行积存金"
+      description: "京东金融浙商银行积存金实时价格，Native CNY/g price."
+      name: "浙商银行积存金"
+      symbol: "1961543816"
+      endpoint: "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816"
+      api_key_env: ""
+      response_format: "jdjygold_latest"
+      kline_mode: "history"
+      currency: "CNY"
+      unit: "g"
+      headers:
+        User-Agent: "Mozilla/5.0"
+        Referer: "https://golds.jd.com/"
+      json_paths:
+        price: "latest.price"
+        timestamp: "latest.timestamp"
+      timeout_seconds: 5
+      max_data_delay_seconds: 43200
+      min_price: 200
+      max_price: 1500
 retry:
   max_attempts: 3
   base_delay_seconds: 0.2

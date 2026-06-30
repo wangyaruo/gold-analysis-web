@@ -5,6 +5,8 @@ from typing import Any
 
 logger = logging.getLogger("gold_analysis")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def log_event(level: int, event: str, **context: Any) -> None:
