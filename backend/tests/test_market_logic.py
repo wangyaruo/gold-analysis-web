@@ -2,7 +2,10 @@ import unittest
 import ssl
 import asyncio
 import logging
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import patch
 
 from backend.app.core import logging as app_logging
 from backend.app.services.decision import TechnicalSignal, build_recommendation
@@ -11,9 +14,16 @@ from backend.app.services.indicators import compute_ema, compute_sma, compute_st
 from backend.app.services.pnl import calculate_pnl
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import PriceTick, validate_price_tick
-from backend.app.api import _convert_price_for_display, _max_data_delay_seconds
+from backend.app.api import (
+    _capture_kline_tick_for_source,
+    _convert_price_for_display,
+    _history_kline_source_keys,
+    _max_data_delay_seconds,
+)
+from backend.app.services import klines as klines_service
 from backend.app.services.data_provider import MarketDataError, PriceProvider, _httpx_verify_option, _parse_response_payload
 from backend.app.services.klines import get_klines
+from backend.app.services.kline_store import KlineStore
 
 
 class IndicatorTests(unittest.TestCase):
@@ -147,6 +157,23 @@ class PriceProviderTests(unittest.TestCase):
         self.assertEqual(payload["latest"]["product_sku"], "1961543816")
         self.assertEqual(payload["latest"]["yesterday_price"], 889.85)
 
+    def test_parse_jdjygold_today_prices_payload_extracts_day_range(self):
+        payload = _parse_response_payload(
+            '{"resultData":{"datas":[{"name":"2026-06-30 00:00:00","value":["2026-06-30 00:00:00","880.00"]},{"name":"2026-06-30 09:00:00","value":["2026-06-30 09:00:00","863.05"]},{"name":"2026-06-30 17:00:00","value":["2026-06-30 17:00:00","876.84"]}],"status":"SUCCESS"},"success":true,"resultCode":0,"resultMsg":"成功","channelEncrypt":0}',
+            "jdjygold_today_prices",
+        )
+
+        self.assertEqual(payload["latest"]["low_price"], 863.05)
+        self.assertEqual(payload["latest"]["high_price"], 880.0)
+        self.assertEqual(payload["latest"]["candles"][0], {
+            "time": "2026-06-30T00:00:00",
+            "open": 880.0,
+            "high": 880.0,
+            "low": 880.0,
+            "close": 880.0,
+        })
+        self.assertEqual(payload["latest"]["candles"][-1]["time"], "2026-06-30T17:00:00")
+
     def test_legacy_tls_source_uses_ssl_context_for_httpx(self):
         verify_option = _httpx_verify_option({"legacy_tls": True})
 
@@ -244,6 +271,73 @@ class PriceProviderTests(unittest.TestCase):
         self.assertEqual(provider.today_range("demo")["low"], 865.39)
         self.assertEqual(provider.today_range("demo")["high"], 881.56)
 
+    def test_today_range_can_require_source_reported_day_high_and_low(self):
+        provider = PriceProvider(self._provider_config())
+        now = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)
+
+        provider._append_price("demo", 866.64, now, include_observed_range=False)
+
+        self.assertIsNone(provider.today_range("demo"))
+
+        provider._append_price(
+            "demo",
+            866.64,
+            now,
+            day_low=865.39,
+            day_high=881.56,
+            include_observed_range=False,
+        )
+
+        self.assertEqual(provider.today_range("demo")["low"], 865.39)
+        self.assertEqual(provider.today_range("demo")["high"], 881.56)
+
+    def test_http_fetch_reads_configured_day_range_before_client_closes(self):
+        class Response:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                self.closed = False
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args) -> None:
+                self.closed = True
+
+            async def get(self, *args, **kwargs):
+                return Response(
+                    '{"resultData":{"datas":{"price":"876.56","time":"1782717342000"},"status":"SUCCESS"},"success":true}'
+                )
+
+            async def request(self, *args, **kwargs):
+                if self.closed:
+                    raise RuntimeError("client closed")
+                return Response(
+                    '{"resultData":{"datas":[{"value":["2026-06-30 09:00:00","863.05"]},{"value":["2026-06-30 17:00:00","880.83"]}],"status":"SUCCESS"},"success":true}'
+                )
+
+        provider = PriceProvider(self._provider_config())
+        source_config = {
+            "type": "http",
+            "endpoint": "https://example.test/latest",
+            "response_format": "jdjygold_latest",
+            "json_paths": {"price": "latest.price", "timestamp": "latest.timestamp"},
+            "day_range_endpoint": "https://example.test/today",
+            "day_range_method": "post",
+            "day_range_response_format": "jdjygold_today_prices",
+        }
+
+        with patch("backend.app.services.data_provider.httpx.AsyncClient", FakeAsyncClient):
+            tick = asyncio.run(provider._fetch_http(source_config))
+
+        self.assertEqual(tick.day_low, 863.05)
+        self.assertEqual(tick.day_high, 880.83)
+
     def test_active_source_falls_back_to_demo_when_configured(self):
         provider = PriceProvider(
             {
@@ -268,17 +362,149 @@ class PriceProviderTests(unittest.TestCase):
         self.assertEqual(result["type"], "demo")
         self.assertEqual(result["base_price"], 4018.77)
 
-    def test_source_history_klines_use_selected_native_cny_source(self):
+    def test_source_history_klines_use_selected_native_cny_source_from_db(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            store.upsert_bar(
+                "jdjygold_zheshang",
+                "1min",
+                "2026-06-30T09:10:00",
+                886.25,
+                886.43,
+                886.25,
+                886.43,
+            )
+            provider = PriceProvider(
+                {
+                    "data_sources": {
+                        "active": "jdjygold_zheshang",
+                        "price": {
+                            "jdjygold_zheshang": {
+                                "type": "demo",
+                                "name": "浙商银行积存金",
+                                "symbol": "1961543816",
+                                "base_price": 886.25,
+                                "volatility": 0,
+                                "currency": "CNY",
+                                "unit": "g",
+                                "kline_mode": "history",
+                            },
+                        },
+                    },
+                    "retry": {"max_attempts": 1},
+                }
+            )
+
+            payload = asyncio.run(get_klines("1min", source="jdjygold_zheshang", provider=provider, store=store))
+
+        self.assertEqual(payload["source"], "jdjygold_zheshang")
+        self.assertEqual(payload["display_unit"], "CNY/g")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["session_open"], "2026-06-30T09:10:00")
+        self.assertEqual(payload["session_close"], "2026-06-30T09:10:00")
+        self.assertAlmostEqual(payload["candles"][-1]["close"], 886.43, places=2)
+
+    def test_source_intraday_klines_use_configured_today_prices_endpoint(self):
+        class Response:
+            text = '{"resultData":{"datas":[{"value":["2026-06-30 09:10:00","863.05"]},{"value":["2026-06-30 13:00:00","875.18"]},{"value":["2026-06-30 17:00:00","880.83"]}],"status":"SUCCESS"},"success":true}'
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                return None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args) -> None:
+                return None
+
+            async def request(self, method, endpoint, **kwargs):
+                self.method = method
+                self.endpoint = endpoint
+                self.kwargs = kwargs
+                return Response()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            provider = PriceProvider(
+                {
+                    "data_sources": {
+                        "active": "jdjygold_zheshang",
+                        "price": {
+                            "jdjygold_zheshang": {
+                                "type": "http",
+                                "name": "浙商银行积存金",
+                                "currency": "CNY",
+                                "unit": "g",
+                                "kline_mode": "intraday",
+                                "day_range_endpoint": "https://example.test/today",
+                                "day_range_method": "post",
+                                "day_range_params": {"productSku": "1961543816"},
+                                "day_range_response_format": "jdjygold_today_prices",
+                            },
+                        },
+                    },
+                    "retry": {"max_attempts": 1},
+                }
+            )
+            klines_service._cache.clear()
+
+            with patch("backend.app.services.klines.httpx.AsyncClient", FakeAsyncClient):
+                payload = asyncio.run(get_klines("1min", source="jdjygold_zheshang", provider=provider, store=store))
+
+        self.assertEqual(payload["source"], "jdjygold_zheshang")
+        self.assertEqual(payload["display_unit"], "CNY/g")
+        self.assertEqual(payload["count"], 3)
+        self.assertEqual([candle["time"] for candle in payload["candles"]], [
+            "2026-06-30T09:10:00",
+            "2026-06-30T13:00:00",
+            "2026-06-30T17:00:00",
+        ])
+        self.assertEqual(payload["candles"][-1]["close"], 880.83)
+
+    def test_source_daily_klines_use_local_db_for_intraday_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            store.upsert_bar("jdjygold_zheshang", "1day", "2026-06-30T00:00:00", 866, 880, 860, 878)
+            provider = PriceProvider(
+                {
+                    "data_sources": {
+                        "active": "jdjygold_zheshang",
+                        "price": {
+                            "jdjygold_zheshang": {
+                                "type": "http",
+                                "name": "浙商银行积存金",
+                                "currency": "CNY",
+                                "unit": "g",
+                                "kline_mode": "intraday",
+                                "day_range_endpoint": "https://example.test/today",
+                            },
+                        },
+                    },
+                    "retry": {"max_attempts": 1},
+                }
+            )
+
+            payload = asyncio.run(get_klines("1day", source="jdjygold_zheshang", provider=provider, store=store))
+
+        self.assertEqual(payload["source"], "jdjygold_zheshang")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["candles"][0]["change"], 12)
+
+    def test_source_history_klines_do_not_generate_fake_history_without_db_rows(self):
         provider = PriceProvider(
             {
                 "data_sources": {
-                    "active": "jdjygold_zheshang",
+                    "active": "icbc",
                     "price": {
-                        "jdjygold_zheshang": {
+                        "icbc": {
                             "type": "demo",
-                            "name": "浙商银行积存金",
-                            "symbol": "1961543816",
-                            "base_price": 886.25,
+                            "name": "工商银行积存金",
+                            "symbol": "080020000521",
+                            "base_price": 879.15,
                             "volatility": 0,
                             "currency": "CNY",
                             "unit": "g",
@@ -287,15 +513,109 @@ class PriceProviderTests(unittest.TestCase):
                     },
                 },
                 "retry": {"max_attempts": 1},
+                "storage": {"kline_db_path": ":memory:"},
             }
         )
 
-        payload = asyncio.run(get_klines("1min", source="jdjygold_zheshang", provider=provider))
+        payload = asyncio.run(get_klines("1min", source="icbc", provider=provider))
 
-        self.assertEqual(payload["source"], "jdjygold_zheshang")
-        self.assertEqual(payload["display_unit"], "CNY/g")
-        self.assertGreaterEqual(payload["count"], 25)
-        self.assertAlmostEqual(payload["candles"][-1]["close"], 886.43, places=2)
+        self.assertEqual(payload["source"], "icbc")
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["candles"], [])
+
+    def test_history_kline_source_keys_pick_passive_realtime_sources(self):
+        config = {
+            "data_sources": {
+                "price": {
+                    "icbc": {"kline_mode": "history"},
+                    "jdjygold_zheshang": {"kline_mode": "intraday"},
+                    "demo": {"kline_mode": "history"},
+                }
+            }
+        }
+
+        self.assertEqual(_history_kline_source_keys(config, selected_key="jdjygold_zheshang"), ["icbc", "demo"])
+        self.assertEqual(_history_kline_source_keys(config, selected_key="icbc"), ["demo"])
+
+    def test_capture_kline_tick_for_source_records_display_price(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            config = {
+                "data_sources": {
+                    "active": "icbc",
+                    "price": {
+                        "icbc": {
+                            "type": "demo",
+                            "name": "工商银行积存金",
+                            "symbol": "080020000521",
+                            "base_price": 878.0,
+                            "volatility": 0,
+                            "currency": "CNY",
+                            "unit": "g",
+                            "kline_mode": "history",
+                            "min_price": 200,
+                            "max_price": 1500,
+                        },
+                    },
+                },
+                "display": {"currency": "CNY", "unit": "g"},
+                "realtime": {"max_data_delay_seconds": 43200},
+                "retry": {"max_attempts": 1},
+            }
+            provider = PriceProvider(config)
+
+            asyncio.run(_capture_kline_tick_for_source(provider, store, config, "icbc"))
+
+            candles = store.get_candles("icbc", "1min")
+            self.assertEqual(len(candles), 1)
+            self.assertAlmostEqual(candles[0]["close"], 878.18, places=2)
+
+
+class KlineStoreTests(unittest.TestCase):
+    def test_record_price_upserts_minute_day_and_month_bars_with_open_based_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            first = datetime(2026, 6, 30, 9, 0, 20)
+            second = datetime(2026, 6, 30, 9, 0, 55)
+
+            store.record_price("icbc", 880.0, first)
+            store.record_price("icbc", 881.0, second)
+
+            minute = store.get_candles("icbc", "1min")
+            day = store.get_candles("icbc", "1day")
+            month = store.get_candles("icbc", "1month")
+
+        self.assertEqual(len(minute), 1)
+        self.assertEqual(minute[0]["time"], "2026-06-30T09:00:00")
+        self.assertEqual(minute[0]["open"], 880.0)
+        self.assertEqual(minute[0]["high"], 881.0)
+        self.assertEqual(minute[0]["low"], 880.0)
+        self.assertEqual(minute[0]["close"], 881.0)
+        self.assertEqual(minute[0]["change"], 1.0)
+        self.assertAlmostEqual(minute[0]["change_percent"], 1 / 880, places=6)
+        self.assertEqual(day[0]["time"], "2026-06-30T00:00:00")
+        self.assertEqual(month[0]["time"], "2026-06-01T00:00:00")
+
+    def test_prune_applies_period_specific_retention_windows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            now = datetime(2026, 6, 30, 12, 0, 0)
+            store.upsert_bar("icbc", "1min", "2026-05-30T12:00:00", 870, 870, 870, 870)
+            store.upsert_bar("icbc", "1min", "2026-06-01T12:00:00", 871, 871, 871, 871)
+            store.upsert_bar("icbc", "1day", "2026-05-29T00:00:00", 872, 872, 872, 872)
+            store.upsert_bar("icbc", "1day", "2026-06-01T00:00:00", 873, 873, 873, 873)
+            store.upsert_bar("icbc", "1month", "2023-05-01T00:00:00", 874, 874, 874, 874)
+            store.upsert_bar("icbc", "1month", "2023-07-01T00:00:00", 875, 875, 875, 875)
+
+            store.prune(now)
+
+            minute_times = [item["time"] for item in store.get_candles("icbc", "1min")]
+            day_times = [item["time"] for item in store.get_candles("icbc", "1day")]
+            month_times = [item["time"] for item in store.get_candles("icbc", "1month")]
+
+        self.assertEqual(minute_times, ["2026-06-01T12:00:00"])
+        self.assertEqual(day_times, ["2026-06-01T00:00:00"])
+        self.assertEqual(month_times, ["2023-07-01T00:00:00"])
 
 
 class SentimentTests(unittest.TestCase):

@@ -12,13 +12,16 @@ import {
   LineChart,
   Newspaper,
   RefreshCw,
-  ShieldCheck,
   TrendingDown,
   TrendingUp,
 } from 'lucide-vue-next'
 import PriceChart from './components/PriceChart.vue'
 import SentimentGauge from './components/SentimentGauge.vue'
 import {calculatePnl, getKlines, getMarketSnapshot, getPublicConfig} from './api'
+import goldBarsHero from './assets/ui/gold-bars-hero.jpg'
+import goldMarketWave from './assets/ui/gold-market-wave.jpg'
+import goldShieldChart from './assets/ui/gold-shield-chart.png'
+import goldTrendIcon from './assets/ui/gold-trend-icon.png'
 import {buildTodayRange} from './utils/dayRange'
 
 const snapshot = ref(null)
@@ -36,7 +39,6 @@ const klinesLoading = ref(false)
 const selectedPeriod = ref('1min')
 const periodOptions = [
   {key: '1min', label: '分线'},
-  {key: '1h', label: '时线'},
   {key: '1day', label: '日线'},
   {key: '1month', label: '月线'},
 ]
@@ -46,6 +48,8 @@ const portfolio = reactive({
   buy_price: 540,
   quantity: 1,
 })
+const pageBackgroundStyle = {'--page-wave-image': `url(${goldMarketWave})`}
+const priceCardStyle = {'--price-card-image': `url(${goldBarsHero})`}
 
 const refreshSeconds = computed(() => snapshot.value?.refresh_seconds || publicConfig.value?.realtime?.frontend_refresh_seconds || 10)
 const maxDelaySeconds = computed(() => snapshot.value?.max_data_delay_seconds || publicConfig.value?.realtime?.max_data_delay_seconds || 5)
@@ -78,6 +82,12 @@ const priceChange = computed(() => {
   const value = latest - prev
   const percent = prev ? (value / prev) * 100 : 0
   return {value, percent}
+})
+
+const priceChangeText = computed(() => {
+  const value = Number(priceChange.value.value || 0)
+  const percent = Number(priceChange.value.percent || 0)
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)} / ${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`
 })
 
 const confidencePercent = computed(() => Math.round((recommendation.value.confidence || 0) * 100))
@@ -259,25 +269,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page" :style="pageBackgroundStyle">
     <main class="app-shell">
       <header class="topbar">
         <div class="brand">
           <div class="brand-logo">
-            <svg viewBox="0 0 48 48" width="46" height="46" aria-hidden="true">
-              <defs>
-                <linearGradient id="bar-g" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#f4d885"/>
-                  <stop offset="55%" stop-color="#e0b24a"/>
-                  <stop offset="100%" stop-color="#bd8a1a"/>
-                </linearGradient>
-              </defs>
-              <g stroke="#a9790f" stroke-width="0.8" stroke-linejoin="round">
-                <path d="M11 26 l8 -3 l8 3 l-8 3 z" fill="url(#bar-g)"/>
-                <path d="M21 26 l8 -3 l8 3 l-8 3 z" fill="url(#bar-g)"/>
-                <path d="M16 20 l8 -3 l8 3 l-8 3 z" fill="url(#bar-g)"/>
-              </g>
-            </svg>
+            <img :src="goldTrendIcon" alt="" class="brand-logo-img" aria-hidden="true">
           </div>
           <div class="brand-text">
             <h1>黄金市场实时价格分析</h1>
@@ -303,56 +300,54 @@ onUnmounted(() => {
 
       <!-- Row 1: price + recommendation -->
       <section class="row row-1">
-        <article class="card price-card">
-          <p class="card-label">当前黄金价格</p>
-          <div class="price-row">
-            <span class="price-value" data-testid="current-price">{{ currentPrice ? currentPrice.toFixed(2) : '--' }}</span>
-            <span class="price-unit">{{ displayUnit }}</span>
-          </div>
-          <div class="price-range-row" aria-label="今日价格区间">
-            <span class="price-range-chip range-low">
-              <span class="range-label">今日最低</span>
-              <strong>{{ todayRange ? todayRange.low.toFixed(2) : '--' }}</strong>
-              <span>{{ displayUnit }}</span>
-            </span>
-            <span class="price-range-chip range-high">
-              <span class="range-label">今日最高</span>
-              <strong>{{ todayRange ? todayRange.high.toFixed(2) : '--' }}</strong>
-              <span>{{ displayUnit }}</span>
-            </span>
-          </div>
-          <div class="price-meta">
-            <span><Clock3 :size="13"/> {{ formattedTime }}</span>
-            <span>刷新间隔 {{ refreshSeconds }}s</span>
-            <span>数据延迟值 {{ maxDelaySeconds }}s</span>
-            <span>原始 {{ rawPrice ? rawPrice.toFixed(2) : '--' }} {{ sourceUnit }}</span>
-            <span>源 {{ priceSource }}</span>
-          </div>
-          <div class="gold-decor" aria-hidden="true">
-            <svg viewBox="0 0 120 90">
-              <defs>
-                <linearGradient id="decor-g" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#fbe9b8"/>
-                  <stop offset="60%" stop-color="#e8c25c"/>
-                  <stop offset="100%" stop-color="#cc9a26"/>
-                </linearGradient>
-              </defs>
-              <g stroke="#c79a2e" stroke-width="1" stroke-linejoin="round">
-                <path d="M30 64 l22 -8 l22 8 l-22 8 z" fill="url(#decor-g)"/>
-                <path d="M56 64 l22 -8 l22 8 l-22 8 z" fill="url(#decor-g)"/>
-                <path d="M43 48 l22 -8 l22 8 l-22 8 z" fill="url(#decor-g)"/>
-              </g>
-            </svg>
+        <article class="card price-card" :style="priceCardStyle">
+          <div class="price-card-content">
+            <div class="price-heading">
+              <p class="card-label">当前黄金价格</p>
+              <span class="price-delta" :class="{ positive: priceChange.value >= 0, negative: priceChange.value < 0 }">
+                <TrendingUp v-if="priceChange.value >= 0" :size="14"/>
+                <TrendingDown v-else :size="14"/>
+                {{ priceChangeText }}
+              </span>
+            </div>
+            <div class="price-row">
+              <span class="price-value" data-testid="current-price">{{ currentPrice ? currentPrice.toFixed(2) : '--' }}</span>
+              <span class="price-unit">{{ displayUnit }}</span>
+            </div>
+            <div class="price-range-row" aria-label="今日价格区间">
+              <span class="price-range-chip range-low">
+                <span class="range-label">今日最低</span>
+                <strong>{{ todayRange ? todayRange.low.toFixed(2) : '--' }}</strong>
+                <span>{{ displayUnit }}</span>
+              </span>
+              <span class="price-range-chip range-high">
+                <span class="range-label">今日最高</span>
+                <strong>{{ todayRange ? todayRange.high.toFixed(2) : '--' }}</strong>
+                <span>{{ displayUnit }}</span>
+              </span>
+            </div>
+            <div class="price-meta">
+              <span><Clock3 :size="13"/> {{ formattedTime }}</span>
+              <span>刷新 {{ refreshSeconds }}s</span>
+              <span>延迟阈值 {{ maxDelaySeconds }}s</span>
+              <span>原始 {{ rawPrice ? rawPrice.toFixed(2) : '--' }} {{ sourceUnit }}</span>
+              <span data-testid="price-source-name">渠道 {{ activeSourceLabel || priceSource }}</span>
+            </div>
           </div>
         </article>
 
         <article class="card advice-card">
+          <img :src="goldShieldChart" alt="" class="card-watermark advice-watermark" aria-hidden="true">
           <div class="card-head">
-            <span class="head-with-icon"><span class="card-icon gold"><ShieldCheck :size="16"/></span><span class="card-label">结构化建议</span></span>
+            <span class="head-with-icon">
+              <span class="asset-icon-tile"><img :src="goldShieldChart" alt="" aria-hidden="true"></span>
+              <span class="card-label">结构化建议</span>
+            </span>
           </div>
           <div class="advice-action" :class="`advice-${recommendation.action}`" data-testid="recommendation-action">
             {{ recommendationLabel }}
           </div>
+          <p class="advice-summary">{{ recommendationDesc }}</p>
           <div class="confidence">
             <div class="confidence-head">
               <span>置信度</span>
@@ -394,12 +389,23 @@ onUnmounted(() => {
               </label>
             </div>
           </div>
-          <PriceChart :candles="klines" :history="snapshot?.history || []" :stop-loss="stopLoss" :unit="klineUnit" :period="selectedPeriod"/>
+          <PriceChart
+            :candles="klines"
+            :history="snapshot?.history || []"
+            :stop-loss="stopLoss"
+            :unit="klineUnit"
+            :period="selectedPeriod"
+            :source-key="selectedSource"
+          />
         </article>
 
         <article class="card stoploss-card">
+          <img :src="goldShieldChart" alt="" class="card-watermark stoploss-watermark" aria-hidden="true">
           <div class="card-head">
-            <span class="head-with-icon"><span class="card-icon gold"><ShieldCheck :size="16"/></span><span class="card-label">实时止损位</span></span>
+            <span class="head-with-icon">
+              <span class="asset-icon-tile"><img :src="goldShieldChart" alt="" aria-hidden="true"></span>
+              <span class="card-label">实时止损位</span>
+            </span>
           </div>
           <div class="stoploss-value" data-testid="stop-loss">{{ stopLoss ? stopLoss.toFixed(2) : '--' }}</div>
           <div class="metric-list">

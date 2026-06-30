@@ -7,7 +7,9 @@ from typing import Any, Optional
 import httpx
 
 from backend.app.core.config import load_config
+from backend.app.services.data_provider import _parse_response_payload
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
+from backend.app.services.kline_store import KlineStore
 
 # Twelve Data time_series endpoint (USD/oz OHLC for XAU/USD).
 _TD_ENDPOINT = "https://api.twelvedata.com/time_series"
@@ -18,7 +20,6 @@ _TD_SYMBOL = "XAU/USD"
 _PERIODS: dict[str, dict[str, Any]] = {
     # 加载更多历史供 dataZoom 滑块拖动浏览; 前端默认窗口=约10刻度宽, 拖动滚历史
     "1min": {"interval": "1min", "outputsize": 480, "ttl": 30, "agg": 1},     # 约8小时分钟线
-    "1h": {"interval": "1h", "outputsize": 120, "ttl": 300, "agg": 1},        # 约5天小时线
     "1day": {"interval": "1day", "outputsize": 90, "ttl": 3600, "agg": 1},    # 约3个月日线
     "1month": {"interval": "1month", "outputsize": 36, "ttl": 21600, "agg": 1},  # 3年月线
 }
@@ -30,7 +31,6 @@ _cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 def supported_periods() -> list[dict[str, str]]:
     labels = {
         "1min": "分线",
-        "1h": "时线",
         "1day": "日线",
         "1month": "月线",
     }
@@ -134,8 +134,6 @@ def _convert_ohlc(bars: list[dict[str, Any]], display_config: dict[str, Any]) ->
 def _period_delta(period: str) -> timedelta:
     if period == "1min":
         return timedelta(minutes=1)
-    if period == "1h":
-        return timedelta(hours=1)
     if period == "1month":
         return timedelta(days=30)
     return timedelta(days=1)
@@ -170,28 +168,94 @@ def _build_source_history_candles(prices: list[float], period: str) -> list[dict
     return candles
 
 
-async def _get_source_history_klines(period: str, source: str, provider: Any, source_config: dict[str, Any]) -> dict[str, Any]:
-    tick = await provider.latest_tick(source)
-    prices = _ensure_source_history(provider.price_history(source), tick.price)
+async def _get_source_history_klines(
+    period: str,
+    source: str,
+    source_config: dict[str, Any],
+    store: KlineStore,
+) -> dict[str, Any]:
     display_unit = f"{source_config.get('currency', 'CNY')}/{source_config.get('unit', 'g')}"
-    candles = _build_source_history_candles(prices, period)
+    candles = store.get_candles(source, period)
     return {
         "period": period,
         "source": source,
         "display_unit": display_unit,
         "count": len(candles),
         "candles": candles,
+        **_session_bounds(candles),
     }
 
 
-async def get_klines(period: str, source: Optional[str] = None, provider: Any = None) -> dict[str, Any]:
+async def _get_source_intraday_klines(
+    period: str,
+    source: str,
+    source_config: dict[str, Any],
+    store: Optional[KlineStore] = None,
+) -> dict[str, Any]:
+    if period != "1min":
+        raise RuntimeError("source intraday klines only support 1min period")
+
+    now = time.time()
+    cache_key = (source, "source_intraday")
+    cached = _cache.get(cache_key)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    endpoint = source_config["day_range_endpoint"]
+    method = str(source_config.get("day_range_method", "get")).upper()
+    params = dict(source_config.get("day_range_params", {}))
+    headers = dict(source_config.get("headers", {}))
+    request_kwargs: dict[str, Any] = {"headers": headers}
+    if method == "POST":
+        request_kwargs["data"] = params
+    else:
+        request_kwargs["params"] = params
+
+    timeout_seconds = float(source_config.get("timeout_seconds", 5))
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.request(method, endpoint, **request_kwargs)
+        response.raise_for_status()
+        payload = _parse_response_payload(
+            response.text,
+            source_config.get("day_range_response_format", "json"),
+        )
+
+    candles = list(payload.get("latest", {}).get("candles") or [])
+    if not candles:
+        raise RuntimeError("source intraday response has no candles")
+    if store is not None:
+        store.upsert_candles(source, "1min", candles)
+        candles = store.get_candles(source, "1min")
+
+    display_unit = f"{source_config.get('currency', 'CNY')}/{source_config.get('unit', 'g')}"
+    result = {
+        "period": period,
+        "source": source,
+        "display_unit": display_unit,
+        "count": len(candles),
+        "candles": candles,
+        **_session_bounds(candles),
+    }
+    _cache[cache_key] = (now + float(_PERIODS[period]["ttl"]), result)
+    return result
+
+
+async def get_klines(
+    period: str,
+    source: Optional[str] = None,
+    provider: Any = None,
+    store: Optional[KlineStore] = None,
+) -> dict[str, Any]:
     if period not in _PERIODS:
         raise ValueError(f"unsupported period: {period}")
 
     if source and provider is not None:
         source_config = provider.source_config(source)
-        if source_config.get("kline_mode") == "history":
-            return await _get_source_history_klines(period, source, provider, source_config)
+        store = store or KlineStore.from_config(getattr(provider, "config", {}))
+        if source_config.get("kline_mode") == "intraday" and period == "1min":
+            return await _get_source_intraday_klines(period, source, source_config, store)
+        if source_config.get("kline_mode") in {"history", "intraday"}:
+            return await _get_source_history_klines(period, source, source_config, store)
 
     now = time.time()
     cache_key = (source or "twelve_data", period)
@@ -217,6 +281,17 @@ async def get_klines(period: str, source: Optional[str] = None, provider: Any = 
         "display_unit": display_unit,
         "count": len(candles),
         "candles": candles,
+        **_session_bounds(candles),
     }
     _cache[cache_key] = (now + float(spec["ttl"]), payload)
     return payload
+
+
+def _session_bounds(candles: list[dict[str, Any]]) -> dict[str, str]:
+    times = [str(candle.get("time")) for candle in candles if candle.get("time")]
+    if not times:
+        return {}
+    return {
+        "session_open": min(times),
+        "session_close": max(times),
+    }

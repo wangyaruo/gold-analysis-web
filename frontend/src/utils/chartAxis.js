@@ -8,6 +8,16 @@ const TICK_STEPS = {
   '1day': { unit: 'day', step: 1 },
   '1month': { unit: 'month', step: 1 },
 }
+const INTRADAY_REFERENCE_TIMES = [
+  { hour: 13, minute: 0 },
+  { hour: 18, minute: 0 },
+  { hour: 22, minute: 30 },
+]
+const ZOOM_MIN_WINDOWS = {
+  '1min': 30,
+  '1day': 7,
+  '1month': 6,
+}
 
 export function parseTime(raw) {
   const d = new Date(raw)
@@ -24,6 +34,10 @@ function dateKey(d) {
 
 function timeLabel(d) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function localIsoMinute(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${timeLabel(d)}:00.000`
 }
 
 function chineseDateLabel(d) {
@@ -99,6 +113,139 @@ function nearestUnusedDataIndex(points, target, usedIndexes) {
   return best
 }
 
+function minuteTick(date) {
+  const d = new Date(date)
+  d.setSeconds(0, 0)
+  return d
+}
+
+function intradayTargetTime(baseDate, { hour, minute }) {
+  const d = new Date(baseDate)
+  d.setHours(hour, minute, 0, 0)
+  return d
+}
+
+function buildIntradayReferenceTicks(visiblePoints) {
+  if (visiblePoints.length <= 4) {
+    return visiblePoints.map((point) => ({ index: point.index, time: minuteTick(point.time) }))
+  }
+
+  const usedIndexes = new Set([visiblePoints[0].index])
+  const ticks = [{ index: visiblePoints[0].index, time: minuteTick(visiblePoints[0].time) }]
+  const baseDate = visiblePoints[0].time
+
+  INTRADAY_REFERENCE_TIMES.forEach((reference) => {
+    const target = intradayTargetTime(baseDate, reference)
+    const index = nearestUnusedDataIndex(visiblePoints, target, usedIndexes)
+    if (index == null) return
+    usedIndexes.add(index)
+    ticks.push({ index, time: minuteTick(visiblePoints.find((point) => point.index === index)?.time || target) })
+  })
+
+  return ticks.sort((a, b) => a.index - b.index)
+}
+
+function minutesBetween(start, end) {
+  return Math.round((end.getTime() - start.getTime()) / 60000)
+}
+
+function mergeMinuteBar(existing, item) {
+  const open = Number(item.open)
+  const high = Number(item.high ?? item.close)
+  const low = Number(item.low ?? item.close)
+  const close = Number(item.close)
+  const next = { ...existing }
+
+  if (!Number.isFinite(next.open) && Number.isFinite(open)) next.open = open
+  if (Number.isFinite(high)) next.high = Number.isFinite(next.high) ? Math.max(next.high, high) : high
+  if (Number.isFinite(low)) next.low = Number.isFinite(next.low) ? Math.min(next.low, low) : low
+  if (Number.isFinite(close)) next.close = close
+
+  return next
+}
+
+export function buildIntradayTimeline(data) {
+  const points = data
+    .map((item) => ({ item, time: parseTime(item.time) }))
+    .filter(({ item, time }) => time && Number.isFinite(Number(item.close)))
+    .sort((a, b) => a.time - b.time)
+
+  if (!points.length) {
+    return { data: [], labelIndexes: new Set(), labels: [] }
+  }
+
+  const firstTime = minuteTick(points[0].time)
+  const lastTime = minuteTick(points[points.length - 1].time)
+  const start = firstTime
+  const end = lastTime
+  const barByMinute = new Map()
+
+  points.forEach(({ item, time }) => {
+    const key = localIsoMinute(minuteTick(time))
+    barByMinute.set(key, mergeMinuteBar(barByMinute.get(key) || { time: key }, item))
+  })
+
+  const timeline = []
+  for (let cursor = new Date(start); cursor <= end; cursor.setMinutes(cursor.getMinutes() + 1)) {
+    const key = localIsoMinute(cursor)
+    timeline.push(barByMinute.get(key) || { time: key })
+  }
+
+  const labelIndexes = new Set()
+  const labels = new Array(timeline.length).fill('')
+  const referenceDates = [
+    start,
+    ...INTRADAY_REFERENCE_TIMES.map((reference) => intradayTargetTime(start, reference)),
+    end,
+  ]
+  let lastDayKey = null
+
+  referenceDates.forEach((reference) => {
+    if (reference < start || reference > end) return
+    const index = minutesBetween(start, reference)
+    const key = dateKey(reference)
+    labels[index] = key !== lastDayKey ? `${chineseDateLabel(reference)}\n${timeLabel(reference)}` : timeLabel(reference)
+    labelIndexes.add(index)
+    lastDayKey = key
+  })
+
+  return {
+    data: timeline,
+    labelIndexes,
+    labels,
+    sessionOpen: localIsoMinute(start),
+    sessionClose: localIsoMinute(end),
+  }
+}
+
+export function buildIntradayViewportRange(data, options = {}) {
+  const n = data.length
+  if (!n) return { start: 0, end: 0, focused: false }
+
+  const finiteIndexes = []
+  data.forEach((item, index) => {
+    if (Number.isFinite(Number(item.close))) finiteIndexes.push(index)
+  })
+  if (!finiteIndexes.length) return { start: 0, end: n - 1, focused: false }
+
+  const first = finiteIndexes[0]
+  const last = finiteIndexes[finiteIndexes.length - 1]
+  const span = last - first + 1
+  const fullDayThreshold = Number(options.fullDayThreshold ?? 240)
+  if (span >= fullDayThreshold) return { start: 0, end: n - 1, focused: false }
+
+  const minWindow = Math.min(n, Number(options.minWindow ?? 180))
+  const padding = Number(options.padding ?? 30)
+  const desiredWindow = Math.min(n, Math.max(minWindow, span + padding * 2))
+  if (desiredWindow >= n) return { start: 0, end: n - 1, focused: false }
+  const center = (first + last) / 2
+  let start = Math.round(center - (desiredWindow - 1) / 2)
+  start = Math.max(0, Math.min(start, n - desiredWindow))
+  const end = start + desiredWindow - 1
+
+  return { start, end, focused: true }
+}
+
 function fallbackVisibleTicks(data, period, startIndex, endIndex) {
   return [...fallbackVisibleIndexes(startIndex, endIndex)].map((index) => ({
     index,
@@ -119,6 +266,7 @@ function buildAxisTicks(data, period, range = {}) {
   }
 
   if (!visiblePoints.length) return fallbackVisibleTicks(data, period, startIndex, endIndex)
+  if (period === '1min') return buildIntradayReferenceTicks(visiblePoints)
   if (visiblePoints.length <= AXIS_TICK_COUNT) {
     return visiblePoints.map((point) => ({ index: point.index, time: floorToTick(point.time, period) }))
   }
@@ -179,6 +327,17 @@ export function formatDataZoomLabel(raw, period) {
   if (period === '1month') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
   if (period === '1day') return shortDateLabel(d)
   return `${shortDateLabel(d)} ${timeLabel(d)}`
+}
+
+export function buildViewportResetKey({ period, sourceKey } = {}) {
+  return `${period || ''}::${sourceKey || ''}`
+}
+
+export function buildZoomMinValueSpan(period, dataLength) {
+  const n = Number(dataLength)
+  if (!Number.isFinite(n) || n <= 1) return 0
+  const windowSize = Math.min(n, ZOOM_MIN_WINDOWS[period] || 7)
+  return Math.max(0, windowSize - 1)
 }
 
 // 根据当前可见窗口生成固定刻度:
@@ -251,6 +410,32 @@ export function axisLabelRotate() {
   return 0
 }
 
+export function buildVisibleExtrema(data, startIdx, endIdx) {
+  if (!data.length) return { high: null, low: null }
+
+  const start = Math.max(0, Math.floor(startIdx))
+  const end = Math.min(data.length - 1, Math.ceil(endIdx))
+  if (start > end) return { high: null, low: null }
+
+  let high = null
+  let low = null
+
+  for (let index = start; index <= end; index += 1) {
+    const row = data[index]
+    const highValue = Number(row?.high ?? row?.close)
+    const lowValue = Number(row?.low ?? row?.close)
+
+    if (Number.isFinite(highValue) && (high == null || highValue > high.value)) {
+      high = { index, value: highValue }
+    }
+    if (Number.isFinite(lowValue) && (low == null || lowValue < low.value)) {
+      low = { index, value: lowValue }
+    }
+  }
+
+  return { high, low }
+}
+
 function niceCeil(value) {
   if (!Number.isFinite(value) || value <= 0) return 1
   const exponent = Math.floor(Math.log10(value))
@@ -272,14 +457,14 @@ function roundTo(value, decimals) {
 }
 
 // 纵坐标固定 7 个刻度 (6 段), 整齐间隔, 完整覆盖给定数值范围
-export function buildYAxisScale(values, stopLoss = null) {
+export function buildYAxisScale(values, stopLoss = null, tickCount = Y_AXIS_TICK_COUNT) {
   const allValues = values
     .concat(stopLoss == null ? [] : [stopLoss])
     .map(Number)
     .filter(Number.isFinite)
 
   if (!allValues.length) {
-    return { splitNumber: Y_AXIS_TICK_COUNT - 1 }
+    return { splitNumber: tickCount - 1 }
   }
 
   let minValue = Math.min(...allValues)
@@ -290,7 +475,7 @@ export function buildYAxisScale(values, stopLoss = null) {
     maxValue += padding
   }
 
-  const segments = Y_AXIS_TICK_COUNT - 1
+  const segments = tickCount - 1
   let interval = niceCeil((maxValue - minValue) / segments)
   let decimals = precisionFor(interval)
   let min = roundTo(Math.floor(minValue / interval) * interval, decimals)
@@ -309,12 +494,12 @@ export function buildYAxisScale(values, stopLoss = null) {
 }
 
 // 给定可见区间 [startIdx, endIdx], 用区间内 OHLC 重算纵轴 (拖动时调用)
-export function buildYAxisScaleForRange(data, startIdx, endIdx, stopLoss = null) {
+export function buildYAxisScaleForRange(data, startIdx, endIdx, stopLoss = null, tickCount = Y_AXIS_TICK_COUNT) {
   const s = Math.max(0, Math.floor(startIdx))
   const e = Math.min(data.length - 1, Math.ceil(endIdx))
   const slice = data.slice(s, e + 1)
   const values = slice.flatMap((c) => [c.open, c.high, c.low, c.close])
-  return buildYAxisScale(values, stopLoss)
+  return buildYAxisScale(values, stopLoss, tickCount)
 }
 
 export function formatYAxisValue(value, interval) {

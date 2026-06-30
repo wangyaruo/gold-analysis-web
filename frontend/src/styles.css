@@ -3,8 +3,8 @@
   font-family:
     "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --bg: #f6f1e7;
-  --bg-soft: #fdfaf3;
+  --bg: #f7f0e5;
+  --bg-soft: #fdf9f0;
   --card: #ffffff;
   --ink: #2b2519;
   --ink-soft: #948a76;
@@ -21,8 +21,8 @@
   --blue-soft: #e9f0fd;
   --amber: #e0901e;
   --amber-soft: #fcf2dc;
-  --shadow-sm: 0 8px 24px rgba(150, 120, 50, 0.07);
-  --shadow: 0 18px 48px rgba(150, 120, 50, 0.1);
+  --shadow-sm: 0 8px 24px rgba(143, 105, 39, 0.08);
+  --shadow: 0 20px 52px rgba(143, 105, 39, 0.12);
   --radius: 20px;
   color: var(--ink);
   font-synthesis: none;
@@ -38,8 +38,9 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    radial-gradient(1200px 620px at 10% -10%, #fdf6e6 0%, rgba(253, 246, 230, 0) 55%),
-    radial-gradient(1000px 540px at 108% -4%, #fbf1dc 0%, rgba(250, 240, 220, 0) 52%),
+    radial-gradient(1200px 620px at 10% -10%, #fff2cb 0%, rgba(253, 246, 230, 0) 55%),
+    radial-gradient(1000px 540px at 108% -4%, #fff5dc 0%, rgba(250, 240, 220, 0) 52%),
+    linear-gradient(180deg, #fffdf8 0%, #f8f0e3 46%, #f6efe6 100%),
     var(--bg);
   color: var(--ink);
 }
@@ -51,12 +52,25 @@ select {
 }
 
 .page {
+  position: relative;
+  overflow: hidden;
   width: 100%;
   min-height: 100vh;
   padding: 28px 0 52px;
 }
 
+.page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: var(--page-wave-image) top center / min(100vw, 1600px) auto no-repeat;
+  opacity: 0.16;
+  pointer-events: none;
+}
+
 .app-shell {
+  position: relative;
+  z-index: 1;
   width: min(1320px, calc(100vw - 44px));
   margin: 0 auto;
   display: flex;
@@ -70,8 +84,12 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 6px 4px 20px;
-  border-bottom: 1px solid var(--line);
+  padding: 17px 20px;
+  border: 1px solid rgba(226, 211, 177, 0.82);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px);
 }
 
 .brand {
@@ -83,15 +101,25 @@ select {
 .brand-logo {
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 56px;
+  width: 62px;
+  height: 62px;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #fff6de, #fff);
+  box-shadow: inset 0 0 0 1px rgba(214, 176, 88, 0.28), 0 10px 18px rgba(184, 134, 11, 0.12);
+}
+
+.brand-logo-img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  filter: drop-shadow(0 5px 8px rgba(184, 134, 11, 0.2));
 }
 
 .brand-text h1 {
   margin: 0;
-  font-size: 1.6rem;
+  font-size: 1.72rem;
   font-weight: 800;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
   color: #2c2410;
 }
 
@@ -99,7 +127,7 @@ select {
   margin: 4px 0 0;
   font-size: 0.84rem;
   color: var(--ink-soft);
-  letter-spacing: 0.4px;
+  letter-spacing: 0;
 }
 
 .status-cluster {
@@ -112,12 +140,12 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 16px;
-  border-radius: 999px;
+  padding: 9px 16px;
+  border-radius: 12px;
   font-size: 0.82rem;
   font-weight: 600;
-  border: 1px solid var(--line);
-  background: #fff;
+  border: 1px solid rgba(226, 211, 177, 0.9);
+  background: rgba(255, 255, 255, 0.82);
 }
 
 .status-ok {
@@ -146,8 +174,8 @@ select {
   width: 42px;
   height: 42px;
   border-radius: 12px;
-  border: 1px solid var(--line);
-  background: #fff;
+  border: 1px solid rgba(226, 211, 177, 0.9);
+  background: rgba(255, 255, 255, 0.82);
   color: var(--gold-deep);
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
@@ -184,14 +212,17 @@ select {
 
 /* ---------- Cards base ---------- */
 .card {
-  background: var(--card);
-  border: 1px solid var(--line);
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(226, 211, 177, 0.82);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
   padding: 24px 26px;
   display: flex;
   flex-direction: column;
   gap: 18px;
+  backdrop-filter: blur(10px);
 }
 
 .card-head {
@@ -250,6 +281,38 @@ select {
   background: var(--blue-soft);
 }
 
+.asset-icon-tile {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #fff5dc, #ffffff);
+  border: 1px solid rgba(214, 176, 88, 0.22);
+  box-shadow: 0 8px 16px rgba(184, 134, 11, 0.12);
+  flex-shrink: 0;
+}
+
+.asset-icon-tile img {
+  width: 25px;
+  height: 25px;
+  object-fit: contain;
+}
+
+.card-watermark {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.12;
+  filter: saturate(0.92);
+  z-index: 0;
+}
+
+.card > *:not(.card-watermark) {
+  position: relative;
+  z-index: 1;
+}
+
 /* ---------- Rows ---------- */
 .row {
   display: grid;
@@ -272,8 +335,59 @@ select {
 .price-card {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(135deg, #fffdf7 0%, #fdf4e2 100%);
-  gap: 14px;
+  min-height: 220px;
+  padding: 28px 32px;
+  background:
+    linear-gradient(90deg, rgba(255, 253, 247, 0.97) 0%, rgba(255, 250, 238, 0.92) 47%, rgba(255, 244, 220, 0.45) 100%),
+    var(--price-card-image) right center / cover no-repeat;
+  box-shadow: var(--shadow);
+  gap: 16px;
+}
+
+.price-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(240, 189, 72, 0.07) 100%);
+  pointer-events: none;
+}
+
+.price-card-content {
+  width: min(640px, 100%);
+  position: relative;
+  z-index: 1;
+}
+
+.price-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.price-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.price-delta.positive {
+  color: var(--green);
+  border-color: rgba(31, 157, 107, 0.18);
+}
+
+.price-delta.negative {
+  color: var(--red);
+  border-color: rgba(214, 69, 61, 0.18);
 }
 
 .price-row {
@@ -282,16 +396,17 @@ select {
   gap: 12px;
   position: relative;
   z-index: 1;
+  margin-bottom: 18px;
 }
 
 .price-value {
-  font-size: 4rem;
+  font-size: 5.25rem;
   font-weight: 800;
   line-height: 1;
-  letter-spacing: -1px;
+  letter-spacing: 0;
   color: var(--gold-deep);
   font-variant-numeric: tabular-nums;
-  background: linear-gradient(120deg, #d9ad3c 0%, #b8860b 60%, #9a7008 100%);
+  background: linear-gradient(120deg, #d9ad3c 0%, #b8860b 54%, #8f6200 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -309,7 +424,8 @@ select {
   gap: 10px;
   position: relative;
   z-index: 1;
-  max-width: 560px;
+  max-width: 620px;
+  margin-bottom: 16px;
 }
 
 .price-range-chip {
@@ -317,13 +433,15 @@ select {
   align-items: baseline;
   gap: 6px;
   min-height: 34px;
-  padding: 7px 12px;
+  padding: 8px 12px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 0.78rem;
   font-weight: 700;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.76);
+  backdrop-filter: blur(6px);
 }
 
 .price-range-chip strong {
@@ -349,9 +467,9 @@ select {
 .price-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 22px;
+  gap: 9px 18px;
   font-size: 0.8rem;
-  color: var(--ink-soft);
+  color: #7d705b;
   position: relative;
   z-index: 1;
 }
@@ -362,32 +480,27 @@ select {
   gap: 5px;
 }
 
-.gold-decor {
-  position: absolute;
-  right: 26px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 200px;
-  opacity: 0.92;
-  pointer-events: none;
-  filter: drop-shadow(0 10px 18px rgba(184, 134, 11, 0.22));
-}
-
-.gold-decor svg {
-  width: 100%;
-  height: auto;
-}
-
 /* ---------- Advice card ---------- */
 .advice-card {
   justify-content: flex-start;
+  min-height: 220px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(255, 249, 235, 0.82)),
+    rgba(255, 255, 255, 0.9);
+}
+
+.advice-watermark {
+  width: 170px;
+  right: -34px;
+  bottom: -38px;
 }
 
 .advice-action {
-  font-size: 2.3rem;
+  font-size: 2.45rem;
   font-weight: 800;
   color: var(--amber);
-  letter-spacing: 1px;
+  letter-spacing: 0;
+  line-height: 1.1;
 }
 
 .advice-action.advice-buy {
@@ -398,10 +511,19 @@ select {
   color: var(--red);
 }
 
+.advice-summary {
+  margin: -2px 0 0;
+  max-width: 350px;
+  color: #76684f;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
 .confidence {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin-top: auto;
 }
 
 .confidence-head {
@@ -420,7 +542,7 @@ select {
 .confidence-track {
   height: 10px;
   border-radius: 999px;
-  background: #f0e8d6;
+  background: rgba(240, 232, 214, 0.8);
   overflow: hidden;
 }
 
@@ -474,12 +596,26 @@ select {
 }
 
 /* ---------- Stop-loss card ---------- */
+.stoploss-card {
+  min-height: 100%;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(255, 249, 235, 0.82)),
+    rgba(255, 255, 255, 0.9);
+}
+
+.stoploss-watermark {
+  width: 155px;
+  right: -36px;
+  top: 30px;
+}
+
 .stoploss-value {
-  font-size: 2.6rem;
+  font-size: 2.7rem;
   font-weight: 800;
   color: var(--gold-deep);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.5px;
+  letter-spacing: 0;
+  line-height: 1.05;
 }
 
 .metric-list {
@@ -824,19 +960,83 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .gold-decor {
-    opacity: 0.5;
+  .price-card {
+    background-position: right center;
+  }
+
+  .card-watermark {
+    opacity: 0.09;
   }
 }
 
 @media (max-width: 760px) {
+  .page {
+    padding: 16px 0 36px;
+  }
+
+  .app-shell {
+    width: min(100vw - 28px, 1320px);
+    gap: 14px;
+  }
+
   .topbar {
     flex-direction: column;
     align-items: flex-start;
+    padding: 14px;
+    gap: 14px;
+  }
+
+  .brand {
+    gap: 11px;
+  }
+
+  .brand-logo {
+    width: 50px;
+    height: 50px;
+    border-radius: 15px;
+  }
+
+  .brand-logo-img {
+    width: 40px;
+    height: 40px;
+  }
+
+  .brand-text h1 {
+    font-size: 1.25rem;
+  }
+
+  .subtitle {
+    font-size: 0.76rem;
+  }
+
+  .status-cluster {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .card {
+    padding: 18px;
+    border-radius: 16px;
+  }
+
+  .price-card {
+    min-height: 0;
+    padding: 22px 18px;
+    background:
+      linear-gradient(90deg, rgba(255, 253, 247, 0.97) 0%, rgba(255, 250, 238, 0.91) 68%, rgba(255, 244, 220, 0.55) 100%),
+      var(--price-card-image) right bottom / auto 100% no-repeat;
   }
 
   .price-value {
-    font-size: 3rem;
+    font-size: 3.15rem;
+  }
+
+  .price-unit {
+    font-size: 0.9rem;
+  }
+
+  .price-heading {
+    align-items: flex-start;
   }
 
   .price-range-row {
@@ -846,6 +1046,49 @@ select {
   .price-range-chip {
     flex: 1 1 180px;
     justify-content: center;
+  }
+
+  .price-meta {
+    gap: 8px 12px;
+  }
+
+  .advice-action {
+    font-size: 2rem;
+  }
+
+  .stoploss-value {
+    font-size: 2.15rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .price-value {
+    font-size: 2.65rem;
+  }
+
+  .price-row {
+    gap: 8px;
+  }
+
+  .price-range-chip {
+    justify-content: flex-start;
+  }
+
+  .chart-actions {
+    width: 100%;
+  }
+
+  .period-tabs,
+  .select-pill {
+    width: 100%;
+  }
+
+  .period-tab {
+    flex: 1;
+  }
+
+  .select-pill select {
+    width: 100%;
   }
 }
 

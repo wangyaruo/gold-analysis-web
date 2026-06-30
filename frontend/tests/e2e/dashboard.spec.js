@@ -51,6 +51,18 @@ const snapshot = {
   max_data_delay_seconds: 5,
 }
 
+const klines = Array.from({ length: 60 }, (_, index) => {
+  const close = 551 + index * 0.03 + Math.sin(index / 5) * 0.35
+  const open = close - 0.08
+  return {
+    time: new Date(Date.now() - (59 - index) * 60_000).toISOString(),
+    open,
+    high: close + 0.18,
+    low: open - 0.16,
+    close,
+  }
+})
+
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/config/public', async (route) => {
     await route.fulfill({
@@ -67,6 +79,16 @@ test.beforeEach(async ({ page }) => {
             { key: 'demo', label: 'Demo Reference', requires_api_key: false },
           ],
         },
+      },
+    })
+  })
+
+  await page.route('**/api/market/klines**', async (route) => {
+    await route.fulfill({
+      json: {
+        period: '1min',
+        display_unit: 'CNY/g',
+        candles: klines,
       },
     })
   })
@@ -101,10 +123,13 @@ test.beforeEach(async ({ page }) => {
 test('renders realtime market snapshot and recommendation', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByTestId('connection-status')).toContainText('Connected')
+  await expect(page.getByTestId('connection-status')).toContainText('已连接')
   await expect(page.getByTestId('current-price')).toContainText('552.05')
-  await expect(page.getByTestId('price-source-name')).toContainText('yahoo_finance')
-  await expect(page.getByTestId('latest-chart-price')).toContainText('551.17')
+  await expect(page.getByTestId('price-source-name')).toContainText('Yahoo Finance GC=F')
+  await expect(page.locator('.brand-logo-img')).toBeVisible()
+  await expect(page.locator('.asset-icon-tile img')).toHaveCount(2)
+  await expect(page.locator('.period-tab')).toHaveText(['分线', '日线', '月线'])
+  await expect(page.locator('.chart-card canvas')).toBeVisible()
   await expect(page.getByTestId('recommendation-action')).toContainText('建议买入')
   await expect(page.getByTestId('stop-loss')).toContainText('545.82')
 })
@@ -114,7 +139,7 @@ test('switches market data source from the dashboard', async ({ page }) => {
 
   await page.getByTestId('price-source-select').selectOption('demo')
 
-  await expect(page.getByTestId('price-source-name')).toContainText('demo')
+  await expect(page.getByTestId('price-source-name')).toContainText('Demo Reference')
 })
 
 test('calculates portfolio pnl from user inputs', async ({ page }) => {

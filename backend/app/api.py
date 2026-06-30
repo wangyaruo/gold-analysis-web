@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timezone
 from typing import Any, Optional
 
@@ -7,10 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.auth import require_bearer_token
 from backend.app.core.config import load_config
+from backend.app.core.logging import log_event
 from backend.app.services.data_provider import MarketDataError, PriceProvider
 from backend.app.services.decision import TechnicalSignal, build_recommendation
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
 from backend.app.services.indicators import compute_stop_loss
+from backend.app.services.kline_store import KlineStore
 from backend.app.services.market_math import (
     compute_volatility,
     detect_bollinger_breakout,
@@ -26,6 +29,7 @@ from backend.app.services.klines import get_klines, supported_periods
 router = APIRouter()
 _config = load_config()
 _provider = PriceProvider(_config)
+_kline_store = KlineStore.from_config(_config)
 
 
 @router.get("/health")
@@ -93,6 +97,8 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
     source_unit = _source_display_unit(source_config, display_config)
     display_prices = _convert_prices_for_display(prices, display_config, source_config)
     display_stop_loss = _convert_price_for_display(stop_loss.stop_loss, display_config, source_config)
+    _kline_store.record_price(source_config.get("_key"), display_prices[-1], validated_tick.timestamp)
+    _schedule_passive_history_capture(config, source_config.get("_key"))
     today_range = _provider.today_range(source_config.get("_key"))
 
     return {
@@ -135,7 +141,7 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
 @router.get("/market/klines", dependencies=[Depends(require_bearer_token)])
 async def market_klines(period: str = "1day", source: Optional[str] = None) -> dict[str, Any]:
     try:
-        return await get_klines(period, source=source, provider=_provider)
+        return await get_klines(period, source=source, provider=_provider, store=_kline_store)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MarketDataError as exc:
@@ -248,6 +254,52 @@ def _build_history(prices: list[float], display_prices: list[float]) -> list[dic
         {"index": index + 1, "price": price, "display_price": display_price}
         for index, (price, display_price) in enumerate(pairs)
     ]
+
+
+def _history_kline_source_keys(config: dict[str, Any], selected_key: Optional[str] = None) -> list[str]:
+    price_sources = config.get("data_sources", {}).get("price", {})
+    return [
+        key
+        for key, source_config in price_sources.items()
+        if key != selected_key and source_config.get("kline_mode") == "history"
+    ]
+
+
+async def _capture_kline_tick_for_source(
+    provider: PriceProvider,
+    store: KlineStore,
+    config: dict[str, Any],
+    source_key: str,
+) -> None:
+    source_config = provider.source_config(source_key)
+    tick = await provider.latest_tick(source_key)
+    realtime_config = config.get("realtime", {})
+    max_data_delay_seconds = _max_data_delay_seconds(realtime_config, source_config)
+    validated_tick = validate_price_tick(
+        tick,
+        min_price=float(source_config.get("min_price", 500)),
+        max_price=float(source_config.get("max_price", 8000)),
+        max_delay_seconds=max_data_delay_seconds,
+    )
+    display_price = _convert_price_for_display(validated_tick.price, config.get("display", {}), source_config)
+    store.record_price(source_key, display_price, validated_tick.timestamp)
+
+
+async def _capture_passive_history_sources(config: dict[str, Any], selected_key: Optional[str]) -> None:
+    for source_key in _history_kline_source_keys(config, selected_key=selected_key):
+        try:
+            await _capture_kline_tick_for_source(_provider, _kline_store, config, source_key)
+        except Exception as exc:  # noqa: BLE001
+            log_event(30, "passive_kline_capture_failed", source=source_key, error=str(exc))
+
+
+def _schedule_passive_history_capture(config: dict[str, Any], selected_key: Optional[str]) -> None:
+    if not _history_kline_source_keys(config, selected_key=selected_key):
+        return
+    try:
+        asyncio.get_running_loop().create_task(_capture_passive_history_sources(config, selected_key))
+    except RuntimeError:
+        return
 
 
 def _public_data_sources(config: dict[str, Any]) -> dict[str, Any]:

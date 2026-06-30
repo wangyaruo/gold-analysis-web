@@ -46,7 +46,15 @@ class PriceProvider:
             if not fallback_config:
                 raise
             tick = await self._fetch_with_retry(fallback_config)
-        self._append_price(history_key, tick.price, tick.timestamp, day_low=tick.day_low, day_high=tick.day_high)
+        include_observed_range = source_config.get("day_range_mode", "observed") != "reported"
+        self._append_price(
+            history_key,
+            tick.price,
+            tick.timestamp,
+            day_low=tick.day_low,
+            day_high=tick.day_high,
+            include_observed_range=include_observed_range,
+        )
         return tick
 
     def _append_price(
@@ -57,11 +65,19 @@ class PriceProvider:
         *,
         day_low: Optional[float] = None,
         day_high: Optional[float] = None,
+        include_observed_range: bool = True,
     ) -> None:
         prices = self._prices_by_source.setdefault(source_key, [])
         prices.append(price)
         self._prices_by_source[source_key] = prices[-240:]
-        self._update_today_range(source_key, price, timestamp or datetime.now(timezone.utc), day_low, day_high)
+        self._update_today_range(
+            source_key,
+            price,
+            timestamp or datetime.now(timezone.utc),
+            day_low,
+            day_high,
+            include_observed_range=include_observed_range,
+        )
 
     def _update_today_range(
         self,
@@ -70,13 +86,17 @@ class PriceProvider:
         timestamp: datetime,
         day_low: Optional[float],
         day_high: Optional[float],
+        *,
+        include_observed_range: bool = True,
     ) -> None:
         date_key = timestamp.astimezone(SHANGHAI_TZ).date().isoformat()
-        candidates = [float(price)]
+        candidates = [float(price)] if include_observed_range else []
         if day_low is not None:
             candidates.append(float(day_low))
         if day_high is not None:
             candidates.append(float(day_high))
+        if not candidates:
+            return
 
         current = self._daily_ranges_by_source.get(source_key)
         if not current or current.get("date") != date_key:
@@ -180,21 +200,28 @@ class PriceProvider:
             response.raise_for_status()
             payload = _parse_response_payload(response.text, source_config.get("response_format", "json"))
 
-        price_path = source_config.get("json_paths", {}).get("price", "price")
-        timestamp_path = source_config.get("json_paths", {}).get("timestamp", "timestamp")
-        price = get_by_path(payload, price_path)
-        timestamp_value = get_by_path(payload, timestamp_path)
-        if price is None:
-            raise MarketDataError(f"price path not found: {price_path}")
+            price_path = source_config.get("json_paths", {}).get("price", "price")
+            timestamp_path = source_config.get("json_paths", {}).get("timestamp", "timestamp")
+            price = get_by_path(payload, price_path)
+            timestamp_value = get_by_path(payload, timestamp_path)
+            if price is None:
+                raise MarketDataError(f"price path not found: {price_path}")
 
-        timestamp = _parse_timestamp(timestamp_value)
+            timestamp = _parse_timestamp(timestamp_value)
+            day_low = _optional_float(get_by_path(payload, "latest.low_price"))
+            day_high = _optional_float(get_by_path(payload, "latest.high_price"))
+            if (day_low is None or day_high is None) and source_config.get("day_range_endpoint"):
+                fetched_low, fetched_high = await _fetch_day_range(client, source_config, headers)
+                day_low = day_low if day_low is not None else fetched_low
+                day_high = day_high if day_high is not None else fetched_high
+
         return PriceTick(
             symbol=source_config.get("symbol", "XAUUSD"),
             price=float(price),
             timestamp=timestamp,
             source=source_config.get("name", source_config.get("type", "http")),
-            day_low=_optional_float(get_by_path(payload, "latest.low_price")),
-            day_high=_optional_float(get_by_path(payload, "latest.high_price")),
+            day_low=day_low,
+            day_high=day_high,
         )
 
 
@@ -204,6 +231,42 @@ def _httpx_verify_option(source_config: dict[str, Any]) -> bool | ssl.SSLContext
     context = ssl.create_default_context()
     context.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
     return context
+
+
+async def _fetch_day_range(
+    client: httpx.AsyncClient,
+    source_config: dict[str, Any],
+    headers: dict[str, str],
+) -> tuple[Optional[float], Optional[float]]:
+    endpoint = source_config["day_range_endpoint"]
+    method = str(source_config.get("day_range_method", "get")).upper()
+    params = dict(source_config.get("day_range_params", {}))
+    request_kwargs: dict[str, Any] = {"headers": headers}
+    if method == "POST":
+        request_kwargs["data"] = params
+    else:
+        request_kwargs["params"] = params
+
+    try:
+        response = await client.request(method, endpoint, **request_kwargs)
+        response.raise_for_status()
+        payload = _parse_response_payload(
+            response.text,
+            source_config.get("day_range_response_format", "json"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_event(
+            30,
+            "market_day_range_fetch_failed",
+            source=source_config.get("name", source_config.get("type", "http")),
+            error=str(exc),
+        )
+        return None, None
+
+    return (
+        _optional_float(get_by_path(payload, "latest.low_price")),
+        _optional_float(get_by_path(payload, "latest.high_price")),
+    )
 
 
 def _parse_response_payload(text: str, response_format: str) -> dict[str, Any]:
@@ -218,6 +281,8 @@ def _parse_response_payload(text: str, response_format: str) -> dict[str, Any]:
         return _parse_icbc_accrual_payload(text)
     if response_format == "jdjygold_latest":
         return _parse_jdjygold_latest_payload(text)
+    if response_format == "jdjygold_today_prices":
+        return _parse_jdjygold_today_prices_payload(text)
     if response_format == "jsvar":
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
@@ -287,6 +352,43 @@ def _parse_jdjygold_latest_payload(text: str) -> dict[str, Any]:
         "change": _optional_float(latest.get("upAndDownAmt")),
         "change_percent": latest.get("upAndDownRate"),
         "yesterday_price": _optional_float(latest.get("yesterdayPrice")),
+    }
+    return payload
+
+
+def _parse_jdjygold_today_prices_payload(text: str) -> dict[str, Any]:
+    payload = json.loads(text)
+    result_data = payload.get("resultData") or {}
+    if not payload.get("success") or result_data.get("status") != "SUCCESS":
+        raise MarketDataError("invalid JDJYGold today prices response: request was not successful")
+
+    prices: list[float] = []
+    candles: list[dict[str, float | str]] = []
+    for item in result_data.get("datas") or []:
+        value = item.get("value")
+        raw_price = value[1] if isinstance(value, list) and len(value) > 1 else item.get("price")
+        raw_time = value[0] if isinstance(value, list) and value else item.get("name") or item.get("time")
+        parsed = _optional_float(raw_price)
+        if parsed is not None:
+            prices.append(parsed)
+            candles.append(
+                {
+                    "time": str(raw_time).replace(" ", "T"),
+                    "open": parsed,
+                    "high": parsed,
+                    "low": parsed,
+                    "close": parsed,
+                }
+            )
+
+    if not prices:
+        raise MarketDataError("invalid JDJYGold today prices response: no price points")
+
+    candles.sort(key=lambda item: str(item["time"]))
+    payload["latest"] = {
+        "low_price": min(prices),
+        "high_price": max(prices),
+        "candles": candles,
     }
     return payload
 
