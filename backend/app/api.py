@@ -24,6 +24,7 @@ from backend.app.services.pnl import calculate_pnl
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import validate_price_tick
 from backend.app.services.klines import get_klines, supported_periods
+from backend.app.services.monthly_review import build_monthly_review, build_monthly_reviews
 
 
 router = APIRouter()
@@ -153,6 +154,22 @@ async def market_klines(period: str = "1day", source: Optional[str] = None) -> d
 @router.get("/market/periods", dependencies=[Depends(require_bearer_token)])
 async def market_periods() -> dict[str, Any]:
     return {"periods": supported_periods()}
+
+
+@router.get("/market/monthly-review", dependencies=[Depends(require_bearer_token)])
+async def market_monthly_review(source: Optional[str] = None, days: int = 30) -> dict[str, Any]:
+    config = load_config()
+    selected_source = source or "gold"
+    try:
+        return build_monthly_review(selected_source, config, _kline_store, days=days)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/market/monthly-reviews", dependencies=[Depends(require_bearer_token)])
+async def market_monthly_reviews(days: int = 30) -> dict[str, Any]:
+    config = load_config()
+    return build_monthly_reviews(config, _kline_store, days=days)
 
 
 @router.post("/portfolio/pnl", dependencies=[Depends(require_bearer_token)])

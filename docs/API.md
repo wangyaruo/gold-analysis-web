@@ -92,6 +92,55 @@ Authorization: Bearer change-me-local-token
 }
 ```
 
+## GET /api/market/monthly-reviews
+
+返回单面板使用的三类 30 日行情：黄金、白银、铂金。
+
+可选查询参数：
+
+- `days`: 返回天数，默认 `30`。
+
+示例：
+
+```http
+GET /api/market/monthly-reviews?days=30
+Authorization: Bearer change-me-local-token
+```
+
+核心响应：
+
+```json
+{
+  "days": 30,
+  "generated_at": "2026-07-01T09:00:00",
+  "items": [
+    {
+      "key": "gold",
+      "source": "gold",
+      "label": "黄金30日行情",
+      "unit": "CNY/g",
+      "theme": "#c89a2b",
+      "items": [
+        {
+          "date": "2026-06-30",
+          "open": 866.5,
+          "high": 886.88,
+          "low": 863.03,
+          "close": 885.53,
+          "change_percent": 0.022,
+          "intraday_range_percent": 0.0276,
+          "has_data": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+## GET /api/market/monthly-review
+
+兼容旧接口。默认返回 `gold`；`source=icbc` 会映射到 `gold`。前端新页面不再调用该接口。
+
 ## POST /api/portfolio/pnl
 
 请求：

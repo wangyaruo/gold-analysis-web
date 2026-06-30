@@ -30,6 +30,27 @@ storage:
     1day_days: 31
     1month_months: 36
 
+market_review:
+  commodities:
+    gold:
+      label: "黄金30日行情"
+      seed_file: "黄金30日行情.md"
+      currency: "CNY"
+      unit: "g"
+      theme: "#c89a2b"
+    silver:
+      label: "白银30日行情"
+      seed_file: "白银30日行情.md"
+      currency: "CNY"
+      unit: "kg"
+      theme: "#7d8da1"
+    platinum:
+      label: "铂金30日行情"
+      seed_file: "铂金30日行情.md"
+      currency: "CNY"
+      unit: "g"
+      theme: "#7f6bb2"
+
 display:
   currency: "CNY"
   unit: "g"
@@ -73,6 +94,32 @@ data_sources:
       name: "浙商银行积存金"
       symbol: "1961543816"
       endpoint: "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816"
+      api_key_env: ""
+      response_format: "jdjygold_latest"
+      day_range_endpoint: "https://api.jdjygold.com/gw/generic/hj/h5/m/todayPrices"
+      day_range_method: "post"
+      day_range_response_format: "jdjygold_today_prices"
+      day_range_mode: "reported"
+      kline_mode: "intraday"
+      currency: "CNY"
+      unit: "g"
+      headers:
+        User-Agent: "Mozilla/5.0"
+        Referer: "https://golds.jd.com/"
+      json_paths:
+        price: "latest.price"
+        timestamp: "latest.timestamp"
+      timeout_seconds: 5
+      max_data_delay_seconds: 43200
+      min_price: 200
+      max_price: 1500
+    hongyun_gold_reference:
+      type: "http"
+      label: "民生银行积存金"
+      description: "京东金融民生银行积存金公开源实时价格，Native CNY/g price."
+      name: "民生银行积存金"
+      symbol: "P005"
+      endpoint: "https://api.jdjygold.com/gw/generic/hj/h5/m/latestPrice"
       api_key_env: ""
       response_format: "jdjygold_latest"
       day_range_endpoint: "https://api.jdjygold.com/gw/generic/hj/h5/m/todayPrices"

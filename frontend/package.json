@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test": "node src/utils/chartAxis.test.mjs && node src/utils/dayRange.test.mjs && node src/utils/monthlyReview.test.mjs && node src/utils/sentimentGauge.test.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

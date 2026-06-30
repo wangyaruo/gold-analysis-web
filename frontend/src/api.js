@@ -55,6 +55,21 @@ export function getKlines(period, source) {
   return request(`/api/market/klines${query ? `?${query}` : ''}`)
 }
 
+export function getMonthlyReview(source, days = 30) {
+  const params = new URLSearchParams()
+  if (source) params.set('source', source)
+  if (days) params.set('days', String(days))
+  const query = params.toString()
+  return request(`/api/market/monthly-review${query ? `?${query}` : ''}`)
+}
+
+export function getMonthlyReviews(days = 30) {
+  const params = new URLSearchParams()
+  if (days) params.set('days', String(days))
+  const query = params.toString()
+  return request(`/api/market/monthly-reviews${query ? `?${query}` : ''}`)
+}
+
 export function getPeriods() {
   return request('/api/market/periods')
 }

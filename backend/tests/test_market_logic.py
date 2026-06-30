@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.app.core import logging as app_logging
+from backend.app.core.config import load_config
 from backend.app.services.decision import TechnicalSignal, build_recommendation
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
 from backend.app.services.indicators import compute_ema, compute_sma, compute_stop_loss
@@ -19,6 +20,9 @@ from backend.app.api import (
     _convert_price_for_display,
     _history_kline_source_keys,
     _max_data_delay_seconds,
+    _public_data_sources,
+    market_monthly_review,
+    market_monthly_reviews,
 )
 from backend.app.services import klines as klines_service
 from backend.app.services.data_provider import MarketDataError, PriceProvider, _httpx_verify_option, _parse_response_payload
@@ -61,6 +65,40 @@ class LoggingTests(unittest.TestCase):
         self.assertIsNotNone(app_logging.logger)
         self.assertGreaterEqual(logging.getLogger("httpx").level, logging.WARNING)
         self.assertGreaterEqual(logging.getLogger("httpcore").level, logging.WARNING)
+
+
+class ConfigTests(unittest.TestCase):
+    def test_hongyun_gold_reference_source_is_publicly_available(self):
+        config = load_config()
+
+        source_config = config["data_sources"]["price"]["hongyun_gold_reference"]
+        public_options = {
+            option["key"]: option
+            for option in _public_data_sources(config)["options"]
+        }
+
+        self.assertEqual(source_config["label"], "民生银行积存金")
+        self.assertEqual(source_config["name"], "民生银行积存金")
+        self.assertEqual(source_config["endpoint"], "https://api.jdjygold.com/gw/generic/hj/h5/m/latestPrice")
+        self.assertEqual(source_config["response_format"], "jdjygold_latest")
+        self.assertEqual(source_config["day_range_endpoint"], "https://api.jdjygold.com/gw/generic/hj/h5/m/todayPrices")
+        self.assertEqual(source_config["kline_mode"], "intraday")
+        self.assertIn("京东金融民生银行积存金公开源", source_config["description"])
+        self.assertIn("hongyun_gold_reference", public_options)
+        self.assertFalse(public_options["hongyun_gold_reference"]["requires_api_key"])
+
+    def test_three_commodity_monthly_reviews_are_configured(self):
+        config = load_config()
+        commodities = config["market_review"]["commodities"]
+
+        self.assertEqual(list(commodities), ["gold", "silver", "platinum"])
+        self.assertEqual(commodities["gold"]["label"], "黄金30日行情")
+        self.assertEqual(commodities["gold"]["seed_file"], "黄金30日行情.md")
+        self.assertEqual(commodities["silver"]["label"], "白银30日行情")
+        self.assertEqual(commodities["silver"]["seed_file"], "白银30日行情.md")
+        self.assertEqual(commodities["silver"]["unit"], "kg")
+        self.assertEqual(commodities["platinum"]["label"], "铂金30日行情")
+        self.assertEqual(commodities["platinum"]["seed_file"], "铂金30日行情.md")
 
 
 class DisplayPriceTests(unittest.TestCase):
@@ -616,6 +654,229 @@ class KlineStoreTests(unittest.TestCase):
         self.assertEqual(minute_times, ["2026-06-01T12:00:00"])
         self.assertEqual(day_times, ["2026-06-01T00:00:00"])
         self.assertEqual(month_times, ["2023-07-01T00:00:00"])
+
+
+class MonthlyReviewTests(unittest.TestCase):
+    def test_parse_markdown_seed_extracts_gold_june_review_rows(self):
+        from backend.app.services.monthly_review import parse_seed_file
+
+        rows = parse_seed_file(Path("黄金30日行情.md"))
+        valid_rows = [row for row in rows if row["has_data"]]
+        up_rows = [row for row in valid_rows if row["change_percent"] > 0]
+        down_rows = [row for row in valid_rows if row["change_percent"] < 0]
+        flat_rows = [row for row in valid_rows if row["change_percent"] == 0]
+
+        self.assertEqual(len(rows), 30)
+        self.assertEqual(len(valid_rows), 30)
+        self.assertEqual(len(up_rows), 7)
+        self.assertEqual(len(down_rows), 15)
+        self.assertEqual(len(flat_rows), 8)
+        self.assertEqual(rows[0]["date"], "2026-06-01")
+        best = max(valid_rows, key=lambda row: row["change_percent"])
+        worst = min(valid_rows, key=lambda row: row["change_percent"])
+        self.assertEqual(best["date"], "2026-06-30")
+        self.assertAlmostEqual(best["change_percent"], 0.0220)
+        self.assertEqual(worst["date"], "2026-06-10")
+        self.assertAlmostEqual(worst["change_percent"], -0.0369)
+
+    def test_parse_silver_and_platinum_seed_files_extract_exchange_rows(self):
+        from backend.app.services.monthly_review import parse_seed_file
+
+        silver_rows = parse_seed_file(Path("白银30日行情.md"))
+        platinum_rows = parse_seed_file(Path("铂金30日行情.md"))
+        silver_valid = [row for row in silver_rows if row["has_data"]]
+        platinum_valid = [row for row in platinum_rows if row["has_data"]]
+
+        self.assertEqual(len(silver_rows), 30)
+        self.assertEqual(len(platinum_rows), 30)
+        self.assertEqual(len(silver_valid), 21)
+        self.assertEqual(len(platinum_valid), 21)
+        self.assertFalse(silver_rows[5]["has_data"])
+        self.assertFalse(platinum_rows[18]["has_data"])
+
+        silver_june_30 = silver_rows[-1]
+        self.assertEqual(silver_june_30["date"], "2026-06-30")
+        self.assertAlmostEqual(silver_june_30["open"], 14157.0)
+        self.assertAlmostEqual(silver_june_30["high"], 14489.0)
+        self.assertAlmostEqual(silver_june_30["low"], 13710.0)
+        self.assertAlmostEqual(silver_june_30["close"], 14343.0)
+        self.assertAlmostEqual(silver_june_30["change_percent"], (14343.0 - 14157.0) / 14157.0, places=4)
+        self.assertAlmostEqual(silver_june_30["intraday_range_percent"], (14489.0 - 13710.0) / 13710.0, places=4)
+
+        platinum_june_30 = platinum_rows[-1]
+        self.assertEqual(platinum_june_30["date"], "2026-06-30")
+        self.assertAlmostEqual(platinum_june_30["open"], 393.80)
+        self.assertAlmostEqual(platinum_june_30["high"], 394.50)
+        self.assertAlmostEqual(platinum_june_30["low"], 393.80)
+        self.assertAlmostEqual(platinum_june_30["close"], 394.40)
+        self.assertAlmostEqual(platinum_june_30["change_percent"], (394.40 - 393.80) / 393.80, places=4)
+        self.assertAlmostEqual(platinum_june_30["intraday_range_percent"], (394.50 - 393.80) / 393.80, places=4)
+
+    def test_monthly_review_prefers_real_daily_bars_over_seed_rows(self):
+        from backend.app.services.monthly_review import build_monthly_review
+
+        with tempfile.TemporaryDirectory() as tmp:
+            seed_path = Path(tmp) / "黄金30日行情.md"
+            seed_path.write_text(Path("黄金30日行情.md").read_text(), encoding="utf-8")
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            store.upsert_bar("gold", "1day", "2026-07-01T00:00:00", 878.0, 890.0, 870.0, 888.0)
+            store.upsert_bar("gold", "1day", "2026-06-30T00:00:00", 879.0, 891.0, 875.0, 889.0)
+
+            payload = build_monthly_review(
+                "gold",
+                {
+                    "market_review": {
+                        "commodities": {
+                            "gold": {
+                                "label": "黄金30日行情",
+                                "seed_file": str(seed_path),
+                                "currency": "CNY",
+                                "unit": "g",
+                                "theme": "#c89a2b",
+                            }
+                        },
+                    },
+                },
+                store,
+                days=30,
+                now=datetime(2026, 7, 1, 12, 0, 0),
+            )
+
+        self.assertEqual(payload["key"], "gold")
+        self.assertEqual(payload["source"], "gold")
+        self.assertEqual(payload["label"], "黄金30日行情")
+        self.assertEqual(payload["unit"], "CNY/g")
+        self.assertEqual(payload["theme"], "#c89a2b")
+        self.assertTrue(payload["has_seed"])
+        self.assertEqual(len(payload["items"]), 30)
+        self.assertEqual(payload["items"][0]["date"], "2026-06-01")
+        self.assertEqual(payload["items"][-1]["date"], "2026-06-30")
+        june_30 = next(item for item in payload["items"] if item["date"] == "2026-06-30")
+        self.assertEqual(june_30["source"], "realtime")
+        self.assertAlmostEqual(june_30["open"], 879.0)
+        self.assertAlmostEqual(june_30["change_percent"], 10 / 879)
+        self.assertGreaterEqual(len(payload["weekly"]), 5)
+
+    def test_monthly_review_uses_seed_date_window_instead_of_current_day_window(self):
+        from backend.app.services.monthly_review import build_monthly_review
+
+        with tempfile.TemporaryDirectory() as tmp:
+            seed_path = Path(tmp) / "黄金30日行情.md"
+            seed_path.write_text(Path("黄金30日行情.md").read_text(), encoding="utf-8")
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+
+            payload = build_monthly_review(
+                "gold",
+                {
+                    "market_review": {
+                        "commodities": {
+                            "gold": {
+                                "label": "黄金30日行情",
+                                "seed_file": str(seed_path),
+                                "currency": "CNY",
+                                "unit": "g",
+                            }
+                        },
+                    },
+                },
+                store,
+                days=30,
+                now=datetime(2026, 7, 1, 9, 30, 0),
+            )
+
+        self.assertEqual(payload["items"][0]["date"], "2026-06-01")
+        self.assertEqual(payload["items"][-1]["date"], "2026-06-30")
+        self.assertTrue(payload["items"][-1]["has_data"])
+
+    def test_monthly_review_returns_blank_rows_without_seed_or_daily_bars(self):
+        from backend.app.services.monthly_review import build_monthly_review
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            payload = build_monthly_review(
+                "gold",
+                {
+                    "market_review": {
+                        "commodities": {
+                            "gold": {
+                                "label": "黄金30日行情",
+                                "currency": "CNY",
+                                "unit": "g",
+                            }
+                        }
+                    },
+                },
+                store,
+                days=30,
+                now=datetime(2026, 7, 1, 9, 30, 0),
+            )
+
+        self.assertFalse(payload["has_seed"])
+        self.assertEqual(len(payload["items"]), 30)
+        self.assertTrue(all(not item["has_data"] for item in payload["items"]))
+        self.assertEqual(payload["summary"]["trading_days"], 0)
+        self.assertEqual(payload["summary"]["missing_days"], 30)
+        self.assertIsNone(payload["summary"]["best_day"])
+        self.assertIsNone(payload["summary"]["worst_day"])
+        self.assertIsNone(payload["summary"]["cumulative_change_percent"])
+
+    def test_build_monthly_reviews_returns_three_commodities_in_display_order(self):
+        from backend.app.services.monthly_review import build_monthly_reviews
+
+        store = KlineStore(":memory:")
+        payload = build_monthly_reviews(
+            {
+                "market_review": {
+                    "commodities": {
+                        "gold": {
+                            "label": "黄金30日行情",
+                            "seed_file": "黄金30日行情.md",
+                            "currency": "CNY",
+                            "unit": "g",
+                            "theme": "#c89a2b",
+                        },
+                        "silver": {
+                            "label": "白银30日行情",
+                            "seed_file": "白银30日行情.md",
+                            "currency": "CNY",
+                            "unit": "kg",
+                            "theme": "#7d8da1",
+                        },
+                        "platinum": {
+                            "label": "铂金30日行情",
+                            "seed_file": "铂金30日行情.md",
+                            "currency": "CNY",
+                            "unit": "g",
+                            "theme": "#7f6bb2",
+                        },
+                    }
+                }
+            },
+            store,
+            days=30,
+            now=datetime(2026, 7, 1, 9, 30, 0),
+        )
+
+        self.assertEqual(payload["days"], 30)
+        self.assertEqual([item["key"] for item in payload["items"]], ["gold", "silver", "platinum"])
+        self.assertEqual([item["label"] for item in payload["items"]], ["黄金30日行情", "白银30日行情", "铂金30日行情"])
+        self.assertEqual(payload["items"][1]["unit"], "CNY/kg")
+        self.assertEqual(payload["items"][2]["theme"], "#7f6bb2")
+
+    def test_monthly_reviews_api_returns_three_commodity_reviews(self):
+        payload = asyncio.run(market_monthly_reviews(days=30))
+
+        self.assertEqual(payload["days"], 30)
+        self.assertEqual([item["key"] for item in payload["items"]], ["gold", "silver", "platinum"])
+        self.assertEqual([item["label"] for item in payload["items"]], ["黄金30日行情", "白银30日行情", "铂金30日行情"])
+
+    def test_legacy_monthly_review_api_maps_icbc_to_gold(self):
+        payload = asyncio.run(market_monthly_review(source="icbc", days=30))
+
+        self.assertEqual(payload["key"], "gold")
+        self.assertEqual(payload["label"], "黄金30日行情")
+        self.assertEqual(payload["items"][0]["date"], "2026-06-01")
+        self.assertEqual(payload["items"][-1]["date"], "2026-06-30")
 
 
 class SentimentTests(unittest.TestCase):

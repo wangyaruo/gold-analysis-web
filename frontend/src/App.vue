@@ -12,17 +12,18 @@ import {
   LineChart,
   Newspaper,
   RefreshCw,
-  TrendingDown,
   TrendingUp,
 } from 'lucide-vue-next'
 import PriceChart from './components/PriceChart.vue'
 import SentimentGauge from './components/SentimentGauge.vue'
-import {calculatePnl, getKlines, getMarketSnapshot, getPublicConfig} from './api'
+import ThirtyDayReviewChart from './components/ThirtyDayReviewChart.vue'
+import {calculatePnl, getKlines, getMarketSnapshot, getMonthlyReviews, getPublicConfig} from './api'
 import goldBarsHero from './assets/ui/gold-bars-hero.jpg'
 import goldMarketWave from './assets/ui/gold-market-wave.jpg'
 import goldShieldChart from './assets/ui/gold-shield-chart.png'
 import goldTrendIcon from './assets/ui/gold-trend-icon.png'
 import {buildTodayRange} from './utils/dayRange'
+import {sentimentScoreToGaugeValue} from './utils/sentimentGauge'
 
 const snapshot = ref(null)
 const publicConfig = ref(null)
@@ -36,6 +37,8 @@ const pnl = ref(null)
 const selectedSource = ref('')
 const klines = ref([])
 const klinesLoading = ref(false)
+const monthlyReviews = ref([])
+const monthlyReviewLoading = ref(false)
 const selectedPeriod = ref('1min')
 const periodOptions = [
   {key: '1min', label: '分线'},
@@ -74,22 +77,6 @@ const sentiment = computed(() => snapshot.value?.sentiment || {
   negative_hits: []
 })
 
-const priceChange = computed(() => {
-  const history = snapshot.value?.history || []
-  if (history.length < 2) return {value: 0, percent: 0}
-  const latest = Number(history[history.length - 1].display_price ?? history[history.length - 1].price)
-  const prev = Number(history[history.length - 2].display_price ?? history[history.length - 2].price)
-  const value = latest - prev
-  const percent = prev ? (value / prev) * 100 : 0
-  return {value, percent}
-})
-
-const priceChangeText = computed(() => {
-  const value = Number(priceChange.value.value || 0)
-  const percent = Number(priceChange.value.percent || 0)
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)} / ${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`
-})
-
 const confidencePercent = computed(() => Math.round((recommendation.value.confidence || 0) * 100))
 
 const recommendationLabel = computed(() => {
@@ -112,8 +99,7 @@ const recommendationDesc = computed(() => {
 
 // 情绪指数 0-100
 const gaugeValue = computed(() => {
-  const score = Number(sentiment.value.score || 0)
-  return Math.max(0, Math.min(100, Math.round(50 + score * 9)))
+  return sentimentScoreToGaugeValue(sentiment.value.score)
 })
 
 const gaugeMood = computed(() => {
@@ -123,11 +109,6 @@ const gaugeMood = computed(() => {
   if (v > 40) return '中性'
   if (v > 20) return '偏空'
   return '极度看空'
-})
-
-const sentimentScoreText = computed(() => {
-  const s = Number(sentiment.value.score || 0)
-  return `${s >= 0 ? '+' : ''}${s}`
 })
 
 const newsIcons = [LineChart, Globe, TrendingUp, Activity]
@@ -185,6 +166,18 @@ async function loadKlines() {
     klines.value = []
   } finally {
     klinesLoading.value = false
+  }
+}
+
+async function loadMonthlyReviews() {
+  monthlyReviewLoading.value = true
+  try {
+    const data = await getMonthlyReviews(30)
+    monthlyReviews.value = data.items || []
+  } catch (error) {
+    monthlyReviews.value = []
+  } finally {
+    monthlyReviewLoading.value = false
   }
 }
 
@@ -248,7 +241,10 @@ async function updatePnl(options = {}) {
 function scheduleRefresh() {
   timer.value = window.setInterval(refreshSnapshot, refreshSeconds.value * 1000)
   // K线历史每 60 秒整体重拉一次(后端有缓存,不会超额度);最新一根靠 syncLastCandle 实时跟价
-  klineTimer.value = window.setInterval(loadKlines, 60 * 1000)
+  klineTimer.value = window.setInterval(() => {
+    loadKlines()
+    loadMonthlyReviews()
+  }, 60 * 1000)
 }
 
 onMounted(async () => {
@@ -259,6 +255,7 @@ onMounted(async () => {
   }
   await refreshSnapshot()
   await loadKlines()
+  await loadMonthlyReviews()
   scheduleRefresh()
 })
 
@@ -271,44 +268,40 @@ onUnmounted(() => {
 <template>
   <div class="page" :style="pageBackgroundStyle">
     <main class="app-shell">
-      <header class="topbar">
-        <div class="brand">
-          <div class="brand-logo">
-            <img :src="goldTrendIcon" alt="" class="brand-logo-img" aria-hidden="true">
+      <section class="dashboard-screen">
+        <header class="topbar">
+          <div class="brand">
+            <div class="brand-logo">
+              <img :src="goldTrendIcon" alt="" class="brand-logo-img" aria-hidden="true">
+            </div>
+            <div class="brand-text">
+              <h1>黄金市场实时价格分析</h1>
+              <p class="subtitle">实时洞察 · 专业分析 · 智能决策</p>
+            </div>
           </div>
-          <div class="brand-text">
-            <h1>黄金市场实时价格分析</h1>
-            <p class="subtitle">实时洞察 · 专业分析 · 智能决策</p>
+          <div class="status-cluster">
+            <div class="status-pill" :class="connectionClass" data-testid="connection-status">
+              <RefreshCw v-if="loading" class="spin" :size="13"/>
+              <span class="status-dot" v-else></span>
+              <span>{{ connectionLabel }}</span>
+            </div>
+            <button class="icon-button" type="button" aria-label="刷新行情" title="刷新行情" @click="refreshSnapshot">
+              <RefreshCw :size="17" :class="{ spin: loading }"/>
+            </button>
           </div>
-        </div>
-        <div class="status-cluster">
-          <div class="status-pill" :class="connectionClass" data-testid="connection-status">
-            <RefreshCw v-if="loading" class="spin" :size="13"/>
-            <span class="status-dot" v-else></span>
-            <span>{{ connectionLabel }}</span>
-          </div>
-          <button class="icon-button" type="button" aria-label="刷新行情" title="刷新行情" @click="refreshSnapshot">
-            <RefreshCw :size="17" :class="{ spin: loading }"/>
-          </button>
-        </div>
-      </header>
+        </header>
 
-      <section v-if="errorMessage" class="alert" role="alert">
-        <AlertTriangle :size="18"/>
-        <span>{{ errorMessage }}</span>
-      </section>
+        <section v-if="errorMessage" class="alert" role="alert">
+          <AlertTriangle :size="18"/>
+          <span>{{ errorMessage }}</span>
+        </section>
 
-      <!-- Row 1: price + recommendation -->
-      <section class="row row-1">
+        <!-- Row 1: price + recommendation -->
+        <section class="row row-1">
         <article class="card price-card" :style="priceCardStyle">
           <div class="price-card-content">
             <div class="price-heading">
               <p class="card-label">当前黄金价格</p>
-              <span class="price-delta" :class="{ positive: priceChange.value >= 0, negative: priceChange.value < 0 }">
-                <TrendingUp v-if="priceChange.value >= 0" :size="14"/>
-                <TrendingDown v-else :size="14"/>
-                {{ priceChangeText }}
-              </span>
             </div>
             <div class="price-row">
               <span class="price-value" data-testid="current-price">{{ currentPrice ? currentPrice.toFixed(2) : '--' }}</span>
@@ -358,10 +351,10 @@ onUnmounted(() => {
             </div>
           </div>
         </article>
-      </section>
+        </section>
 
-      <!-- Row 2: chart + stop-loss metrics -->
-      <section class="row row-2">
+        <!-- Row 2: chart + stop-loss metrics -->
+        <section class="row row-2">
         <article class="card chart-card">
           <div class="card-head">
             <div>
@@ -427,23 +420,15 @@ onUnmounted(() => {
             </div>
           </div>
         </article>
-      </section>
+        </section>
 
-      <!-- Row 3: sentiment + news + pnl -->
-      <section class="row row-3">
+        <!-- Row 3: sentiment + news + pnl -->
+        <section class="row row-3">
         <article class="card sentiment-card">
           <div class="card-head">
             <span class="head-with-icon"><span class="card-icon amber"><Gauge :size="16"/></span><span class="card-label">市场情绪</span></span>
           </div>
-          <SentimentGauge :value="gaugeValue" :mood="gaugeMood"/>
-          <div class="sentiment-delta">情绪分 {{ sentimentScoreText }} <TrendingUp :size="13"/></div>
-          <div class="sentiment-legend">
-            <span class="legend-key"><span class="dot l1"></span>极度看空</span>
-            <span class="legend-key"><span class="dot l2"></span>看空</span>
-            <span class="legend-key"><span class="dot l3"></span>中性</span>
-            <span class="legend-key"><span class="dot l4"></span>看多</span>
-            <span class="legend-key"><span class="dot l5"></span>极度看多</span>
-          </div>
+          <SentimentGauge :value="gaugeValue" :mood="gaugeMood" :sentiment="sentiment"/>
         </article>
 
         <article class="card news-card">
@@ -499,6 +484,26 @@ onUnmounted(() => {
             </div>
           </div>
         </article>
+        </section>
+      </section>
+
+      <section class="card monthly-review-section" data-testid="monthly-reviews-panel">
+        <div class="monthly-reviews-head">
+          <div>
+            <p class="card-label">30天行情</p>
+            <h2 class="card-title">黄金 · 白银 · 铂金</h2>
+          </div>
+        </div>
+        <div v-if="monthlyReviewLoading && !monthlyReviews.length" class="review-empty">30天行情加载中</div>
+        <div v-else class="monthly-reviews-stack">
+          <ThirtyDayReviewChart
+            v-for="review in monthlyReviews"
+            :key="review.key || review.source"
+            :review="review"
+            :theme="review.theme"
+            :loading="monthlyReviewLoading"
+          />
+        </div>
       </section>
 
       <footer class="risk-footer">

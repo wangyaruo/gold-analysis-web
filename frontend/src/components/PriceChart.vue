@@ -505,7 +505,7 @@ watch(() => [props.candles, props.stopLoss], () => {
 }
 .echart-box {
   width: 100%;
-  height: 360px;
+  height: var(--price-chart-height, 360px);
 }
 .chart-empty {
   position: absolute;
@@ -520,7 +520,7 @@ watch(() => [props.candles, props.stopLoss], () => {
 
 @media (max-width: 760px) {
   .echart-box {
-    height: 310px;
+    height: var(--price-chart-height, 310px);
   }
 }
 </style>

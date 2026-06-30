@@ -104,15 +104,17 @@ select {
   width: 62px;
   height: 62px;
   border-radius: 18px;
-  background: linear-gradient(145deg, #fff6de, #fff);
-  box-shadow: inset 0 0 0 1px rgba(214, 176, 88, 0.28), 0 10px 18px rgba(184, 134, 11, 0.12);
+  background:
+    radial-gradient(circle at 42% 34%, rgba(255, 225, 138, 0.26), rgba(207, 159, 46, 0.06) 62%, rgba(255, 255, 255, 0.02));
+  box-shadow: inset 0 0 0 1px rgba(214, 176, 88, 0.2), 0 10px 18px rgba(184, 134, 11, 0.1);
 }
 
 .brand-logo-img {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   object-fit: contain;
-  filter: drop-shadow(0 5px 8px rgba(184, 134, 11, 0.2));
+  mix-blend-mode: multiply;
+  filter: saturate(1.12) contrast(1.04) drop-shadow(0 5px 8px rgba(184, 134, 11, 0.18));
 }
 
 .brand-text h1 {
@@ -287,24 +289,28 @@ select {
   width: 34px;
   height: 34px;
   border-radius: 11px;
-  background: linear-gradient(145deg, #fff5dc, #ffffff);
-  border: 1px solid rgba(214, 176, 88, 0.22);
-  box-shadow: 0 8px 16px rgba(184, 134, 11, 0.12);
+  background:
+    radial-gradient(circle at 42% 34%, rgba(255, 218, 112, 0.2), rgba(207, 159, 46, 0.06) 64%, rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(214, 176, 88, 0.18);
+  box-shadow: 0 8px 16px rgba(184, 134, 11, 0.08);
   flex-shrink: 0;
 }
 
 .asset-icon-tile img {
-  width: 25px;
-  height: 25px;
+  width: 31px;
+  height: 31px;
   object-fit: contain;
+  mix-blend-mode: multiply;
+  filter: saturate(1.1) contrast(1.03);
 }
 
 .card-watermark {
   position: absolute;
   pointer-events: none;
   user-select: none;
-  opacity: 0.12;
-  filter: saturate(0.92);
+  opacity: 0.1;
+  mix-blend-mode: multiply;
+  filter: saturate(0.95);
   z-index: 0;
 }
 
@@ -337,18 +343,30 @@ select {
   overflow: hidden;
   min-height: 220px;
   padding: 28px 32px;
-  background:
-    linear-gradient(90deg, rgba(255, 253, 247, 0.97) 0%, rgba(255, 250, 238, 0.92) 47%, rgba(255, 244, 220, 0.45) 100%),
-    var(--price-card-image) right center / cover no-repeat;
+  background: linear-gradient(90deg, rgba(255, 253, 247, 0.97) 0%, rgba(255, 250, 238, 0.91) 48%, rgba(255, 238, 197, 0.52) 100%);
   box-shadow: var(--shadow);
   gap: 16px;
+}
+
+.price-card::before {
+  content: "";
+  position: absolute;
+  top: -38px;
+  right: -26px;
+  bottom: -18px;
+  left: 48%;
+  background: var(--price-card-image) right 12% / auto 124% no-repeat;
+  opacity: 0.52;
+  filter: saturate(1.36) contrast(1.08);
+  mix-blend-mode: multiply;
+  pointer-events: none;
 }
 
 .price-card::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(240, 189, 72, 0.07) 100%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(240, 189, 72, 0.06) 100%);
   pointer-events: none;
 }
 
@@ -361,33 +379,10 @@ select {
 .price-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 12px;
-}
-
-.price-delta {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  font-size: 0.8rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.price-delta.positive {
-  color: var(--green);
-  border-color: rgba(31, 157, 107, 0.18);
-}
-
-.price-delta.negative {
-  color: var(--red);
-  border-color: rgba(214, 69, 61, 0.18);
 }
 
 .price-row {
@@ -655,104 +650,6 @@ select {
   width: 100%;
 }
 
-.gauge-container {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-}
-
-.gauge-svg {
-  width: 100%;
-  max-width: 260px;
-  height: auto;
-}
-
-.gauge-track {
-  stroke: #eee4d2;
-}
-
-.gauge-tick {
-  fill: var(--ink-soft);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.gauge-needle {
-  stroke: var(--gold-deep);
-  stroke-width: 3;
-  stroke-linecap: round;
-}
-
-.gauge-hub {
-  fill: var(--gold-deep);
-}
-
-.gauge-value {
-  fill: var(--gold-deep);
-  font-size: 28px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.gauge-mood {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.sentiment-delta {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: var(--green-soft);
-  color: var(--green);
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.sentiment-legend {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px 14px;
-  width: 100%;
-}
-
-.legend-key {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.74rem;
-  color: var(--ink-soft);
-}
-
-.legend-key .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.dot.l1 {
-  background: var(--red);
-}
-
-.dot.l2 {
-  background: var(--amber);
-}
-
-.dot.l3 {
-  background: #e6c84a;
-}
-
-.dot.l4 {
-  background: #6cc18a;
-}
-
-.dot.l5 {
-  background: var(--green);
-}
-
 /* ---------- News card ---------- */
 .news-list {
   list-style: none;
@@ -960,8 +857,11 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .price-card {
-    background-position: right center;
+  .price-card::before {
+    top: -34px;
+    right: -30px;
+    left: 50%;
+    background-position: right 10%;
   }
 
   .card-watermark {
@@ -1022,9 +922,16 @@ select {
   .price-card {
     min-height: 0;
     padding: 22px 18px;
-    background:
-      linear-gradient(90deg, rgba(255, 253, 247, 0.97) 0%, rgba(255, 250, 238, 0.91) 68%, rgba(255, 244, 220, 0.55) 100%),
-      var(--price-card-image) right bottom / auto 100% no-repeat;
+    background: linear-gradient(90deg, rgba(255, 253, 247, 0.97) 0%, rgba(255, 250, 238, 0.91) 68%, rgba(255, 244, 220, 0.55) 100%);
+  }
+
+  .price-card::before {
+    top: -18px;
+    right: -52px;
+    bottom: -8px;
+    left: 44%;
+    background: var(--price-card-image) right 6% / auto 96% no-repeat;
+    opacity: 0.48;
   }
 
   .price-value {
@@ -1225,4 +1132,404 @@ select {
   height: 280px;
   color: var(--ink-soft);
   font-size: 0.9rem;
+}
+
+/* ---------- Compact dashboard + 30-day review ---------- */
+:root {
+  --radius: 8px;
+}
+
+.page {
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 10px 0 24px;
+}
+
+.app-shell {
+  width: min(1320px, calc(100vw - 18px));
+  gap: 12px;
+}
+
+.dashboard-screen {
+  min-height: calc(100vh - 20px);
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.15fr) minmax(190px, 0.88fr);
+  grid-template-rows: 48px 156px 308px 207px;
+  grid-template-areas:
+    "topbar topbar topbar"
+    "price price advice"
+    "chart chart stoploss"
+    "sentiment news pnl";
+  gap: 8px;
+}
+
+.dashboard-screen .row {
+  display: contents;
+}
+
+.dashboard-screen .topbar {
+  grid-area: topbar;
+  flex-direction: row;
+  align-items: center;
+  padding: 6px 10px;
+  gap: 10px;
+  border-radius: 8px;
+}
+
+.dashboard-screen .brand {
+  gap: 9px;
+}
+
+.dashboard-screen .brand-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+}
+
+.dashboard-screen .brand-logo-img {
+  width: 34px;
+  height: 34px;
+}
+
+.dashboard-screen .brand-text h1 {
+  font-size: 1.05rem;
+  line-height: 1.1;
+}
+
+.dashboard-screen .subtitle {
+  margin-top: 2px;
+  font-size: 0.7rem;
+}
+
+.dashboard-screen .status-cluster {
+  width: auto;
+  gap: 7px;
+}
+
+.dashboard-screen .status-pill {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.74rem;
+}
+
+.dashboard-screen .icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.dashboard-screen .alert {
+  grid-column: 1 / -1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+}
+
+.dashboard-screen .card {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  gap: 8px;
+  box-shadow: 0 8px 20px rgba(143, 105, 39, 0.08);
+}
+
+.dashboard-screen .card-head {
+  gap: 8px;
+}
+
+.dashboard-screen .card-label {
+  font-size: 0.78rem;
+}
+
+.dashboard-screen .card-title {
+  margin-top: 1px;
+  font-size: 0.72rem;
+}
+
+.dashboard-screen .price-card {
+  grid-area: price;
+  min-height: 0;
+  padding: 12px 14px;
+}
+
+.dashboard-screen .price-card::before {
+  top: 0;
+  right: -34px;
+  bottom: 0;
+  left: 54%;
+  background-size: auto 112%;
+  opacity: 0.48;
+}
+
+.dashboard-screen .price-card-content {
+  width: 100%;
+}
+
+.dashboard-screen .price-heading {
+  margin-bottom: 4px;
+}
+
+.dashboard-screen .price-row {
+  margin-bottom: 7px;
+  gap: 8px;
+}
+
+.dashboard-screen .price-value {
+  font-size: clamp(2.1rem, 6vw, 3.05rem);
+}
+
+.dashboard-screen .price-unit {
+  font-size: 0.78rem;
+}
+
+.dashboard-screen .price-range-row {
+  margin-bottom: 7px;
+  gap: 6px;
+}
+
+.dashboard-screen .price-range-chip {
+  min-height: 26px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  font-size: 0.65rem;
+}
+
+.dashboard-screen .price-range-chip strong {
+  font-size: 0.78rem;
+}
+
+.dashboard-screen .price-meta {
+  gap: 5px 10px;
+  font-size: 0.66rem;
+}
+
+.dashboard-screen .advice-card {
+  grid-area: advice;
+  min-height: 0;
+}
+
+.dashboard-screen .asset-icon-tile {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.dashboard-screen .asset-icon-tile img {
+  width: 24px;
+  height: 24px;
+}
+
+.dashboard-screen .advice-watermark,
+.dashboard-screen .stoploss-watermark {
+  display: none;
+}
+
+.dashboard-screen .advice-action {
+  font-size: 1.45rem;
+}
+
+.dashboard-screen .advice-summary {
+  display: -webkit-box;
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dashboard-screen .confidence {
+  gap: 5px;
+}
+
+.dashboard-screen .confidence-head {
+  font-size: 0.7rem;
+}
+
+.dashboard-screen .confidence-track {
+  height: 6px;
+}
+
+.dashboard-screen .chart-card {
+  grid-area: chart;
+  --price-chart-height: 236px;
+}
+
+.dashboard-screen .chart-actions {
+  gap: 6px;
+}
+
+.dashboard-screen .period-tabs {
+  padding: 2px;
+  border-radius: 7px;
+}
+
+.dashboard-screen .period-tab {
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 0.68rem;
+}
+
+.dashboard-screen .select-pill {
+  padding: 5px 7px;
+  border-radius: 7px;
+  font-size: 0.68rem;
+}
+
+.dashboard-screen .select-pill select {
+  max-width: 142px;
+  font-size: 0.68rem;
+}
+
+.dashboard-screen .stoploss-card {
+  grid-area: stoploss;
+}
+
+.dashboard-screen .stoploss-value {
+  font-size: clamp(1.55rem, 4vw, 2.05rem);
+}
+
+.dashboard-screen .metric-row {
+  padding: 7px 0;
+  font-size: 0.74rem;
+}
+
+.dashboard-screen .sentiment-card {
+  grid-area: sentiment;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  align-items: stretch;
+  row-gap: 7px;
+}
+
+.dashboard-screen .sentiment-card .card-head {
+  min-width: 0;
+}
+
+.dashboard-screen .news-card {
+  grid-area: news;
+}
+
+.dashboard-screen .news-list {
+  gap: 0;
+}
+
+.dashboard-screen .news-item {
+  gap: 7px;
+  padding: 4px 0;
+}
+
+.dashboard-screen .news-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+.dashboard-screen .news-title {
+  display: -webkit-box;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dashboard-screen .news-time,
+.dashboard-screen .link-button {
+  display: none;
+}
+
+.dashboard-screen .pnl-card {
+  grid-area: pnl;
+}
+
+.dashboard-screen .pnl-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.dashboard-screen .pnl-form label {
+  gap: 3px;
+  font-size: 0.64rem;
+}
+
+.dashboard-screen .pnl-form input {
+  min-width: 0;
+  padding: 6px 7px;
+  border-radius: 7px;
+  font-size: 0.72rem;
+}
+
+.dashboard-screen .pnl-form button {
+  grid-column: 1 / -1;
+  padding: 7px;
+  border-radius: 7px;
+  font-size: 0.72rem;
+}
+
+.dashboard-screen .pnl-result-grid {
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.dashboard-screen .pnl-block {
+  gap: 2px;
+  padding-top: 5px;
+}
+
+.dashboard-screen .pnl-block-label {
+  font-size: 0.62rem;
+}
+
+.dashboard-screen .pnl-amount,
+.dashboard-screen .pnl-percent {
+  font-size: 1rem;
+}
+
+.monthly-review-section {
+  padding: 16px;
+}
+
+.monthly-reviews-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.monthly-reviews-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.monthly-review-section .review-empty {
+  display: grid;
+  place-items: center;
+  min-height: 190px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+@media (max-width: 620px) {
+  .dashboard-screen {
+    height: auto;
+    min-height: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-template-areas:
+      "topbar"
+      "price"
+      "advice"
+      "chart"
+      "stoploss"
+      "sentiment"
+      "news"
+      "pnl";
+  }
 }

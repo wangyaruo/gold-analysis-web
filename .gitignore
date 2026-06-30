@@ -12,3 +12,4 @@ test-results/
 *.bak-*
 *.bak
 data/
+.DS_Store
