@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import os
+import ssl
 import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Any, Mapping, Optional
 
 
 class EmailConfigError(RuntimeError):
+    pass
+
+
+class EmailSendError(RuntimeError):
     pass
 
 
@@ -18,18 +24,22 @@ class EmailConfig:
     username: str
     password: str
     from_email: str
+    envelope_from_email: str = ""
     use_tls: bool = True
+    use_ssl: bool = False
 
 
 ALERT_KIND_LABELS = {
-    "custom_high": "自定义高价提醒",
-    "custom_low": "自定义低价提醒",
+    "custom_high": "预设清仓价格提醒",
+    "custom_low": "预设抄底价格提醒",
     "predicted_high_touch": "预估高点首次触达",
     "predicted_high_breakout": "预估高点继续突破",
     "predicted_low_touch": "预估低点首次触达",
     "predicted_low_breakout": "预估低点继续突破",
     "test": "测试邮件",
 }
+
+DEFAULT_FROM_NAME = "黄金价格-波动通知"
 
 
 def build_email_config(email_config: dict[str, Any], environ: Optional[Mapping[str, str]] = None) -> EmailConfig:
@@ -48,13 +58,23 @@ def build_email_config(email_config: dict[str, Any], environ: Optional[Mapping[s
     except ValueError as exc:
         raise EmailConfigError(f"invalid SMTP port: {port_text}") from exc
 
+    use_ssl = _bool(
+        _env_value(env, email_config.get("use_ssl_env", "ALERT_SMTP_USE_SSL")),
+        default=port == 465,
+    )
+
     return EmailConfig(
         host=host,
         port=port,
         username=_env_value(env, email_config.get("smtp_username_env", "ALERT_SMTP_USERNAME")) or "",
         password=_env_value(env, email_config.get("smtp_password_env", "ALERT_SMTP_PASSWORD")) or "",
         from_email=from_email,
+        envelope_from_email=_env_value(
+            env,
+            email_config.get("envelope_from_email_env", "ALERT_ENVELOPE_FROM_EMAIL"),
+        ),
         use_tls=_bool(_env_value(env, email_config.get("use_tls_env", "ALERT_SMTP_USE_TLS")), default=True),
+        use_ssl=use_ssl,
     )
 
 
@@ -95,19 +115,47 @@ def build_alert_email_message(
 
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = from_email
+    message["From"] = formataddr((DEFAULT_FROM_NAME, from_email))
     message["To"] = recipient_email
     message.set_content("\n".join(lines))
     return message
 
 
 def send_email(config: EmailConfig, message: EmailMessage) -> None:
-    with smtplib.SMTP(config.host, config.port, timeout=10) as smtp:
-        if config.use_tls:
-            smtp.starttls()
-        if config.username and config.password:
-            smtp.login(config.username, config.password)
-        smtp.send_message(message)
+    stage = "connect"
+    try:
+        connector = smtplib.SMTP_SSL if config.use_ssl else smtplib.SMTP
+        kwargs: dict[str, Any] = {"timeout": 10}
+        if config.use_ssl:
+            kwargs["context"] = ssl.create_default_context()
+        with connector(config.host, config.port, **kwargs) as smtp:
+            if config.use_tls and not config.use_ssl:
+                stage = "starttls"
+                smtp.starttls()
+            if config.username and config.password:
+                stage = "login"
+                smtp.login(config.username, config.password)
+            stage = "send"
+            smtp.send_message(
+                message,
+                from_addr=config.envelope_from_email or config.from_email,
+            )
+    except smtplib.SMTPServerDisconnected as exc:
+        if stage == "send":
+            raise EmailSendError(
+                "SMTP服务器已登录，但发信阶段被服务商断开。"
+                "常见原因是发件人不被允许、邮箱服务商风控或短时间发送过于频繁；"
+                "请检查 ALERT_FROM_EMAIL / ALERT_ENVELOPE_FROM_EMAIL，稍后重试或更换 SMTP 服务。"
+            ) from exc
+        raise EmailSendError(f"SMTP连接在{stage}阶段被服务商断开：{exc}") from exc
+    except smtplib.SMTPAuthenticationError as exc:
+        raise EmailSendError("SMTP认证失败，请检查邮箱账号、密码或客户端授权码。") from exc
+    except smtplib.SMTPSenderRefused as exc:
+        raise EmailSendError(f"SMTP服务商拒绝当前发件人：{exc.smtp_error!r}") from exc
+    except smtplib.SMTPRecipientsRefused as exc:
+        raise EmailSendError(f"SMTP服务商拒绝当前收件人：{exc.recipients!r}") from exc
+    except smtplib.SMTPException as exc:
+        raise EmailSendError(f"SMTP发送失败：{exc}") from exc
 
 
 def _env_value(environ: Mapping[str, str], name: Any) -> str:

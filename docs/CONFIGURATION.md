@@ -64,8 +64,8 @@ realtime:
 
 ```yaml
 alerts:
-  enabled: false
-  check_interval_seconds: 15
+  enabled: true
+  check_interval_seconds: 2
   predicted_breakout_step_cny_g: 2
   storage_path: "data/price_alerts.sqlite"
   default_source: "icbc"
@@ -75,11 +75,13 @@ alerts:
     smtp_username_env: "ALERT_SMTP_USERNAME"
     smtp_password_env: "ALERT_SMTP_PASSWORD"
     from_email_env: "ALERT_FROM_EMAIL"
+    envelope_from_email_env: "ALERT_ENVELOPE_FROM_EMAIL"
     use_tls_env: "ALERT_SMTP_USE_TLS"
+    use_ssl_env: "ALERT_SMTP_USE_SSL"
 ```
 
-- `enabled`: 是否启动后端邮件提醒 worker。默认关闭；前端仍可保存规则和发送测试邮件。
-- `check_interval_seconds`: worker 检查行情和提醒规则的间隔。
+- `enabled`: 是否启动后端邮件提醒 worker。默认开启。
+- `check_interval_seconds`: worker 检查行情和提醒规则的间隔，默认 2 秒。
 - `predicted_breakout_step_cny_g`: 系统预估高低点首次触达后，价格每继续突破多少 `CNY/g` 再次提醒。默认 `2`。
 - `storage_path`: 提醒规则和触发状态的 SQLite 文件路径。
 - `default_source`: 新建提醒规则时默认使用的行情源。
@@ -93,8 +95,15 @@ ALERT_SMTP_PORT=587
 ALERT_SMTP_USERNAME=alerts@example.com
 ALERT_SMTP_PASSWORD=your-smtp-password-or-app-token
 ALERT_FROM_EMAIL=alerts@example.com
+ALERT_ENVELOPE_FROM_EMAIL=
 ALERT_SMTP_USE_TLS=true
+ALERT_SMTP_USE_SSL=false
 ```
+
+如果邮箱服务商要求 envelope 发件人与展示发件人分开，可设置
+`ALERT_ENVELOPE_FROM_EMAIL`。465 端口通常需要设置
+`ALERT_SMTP_USE_SSL=true`，587/25 端口通常使用
+`ALERT_SMTP_USE_TLS=true`。
 
 预估高低点提醒规则：
 

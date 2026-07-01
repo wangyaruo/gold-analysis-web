@@ -81,8 +81,8 @@ const alertForm = reactive({
   recipient_email: '',
   target_high_price: null,
   target_low_price: null,
-  notify_on_custom_high: false,
-  notify_on_custom_low: false,
+  notify_on_custom_high: true,
+  notify_on_custom_low: true,
   notify_on_predicted_high: true,
   notify_on_predicted_low: true,
 })
@@ -720,11 +720,11 @@ onUnmounted(() => {
             </select>
           </label>
           <label class="alert-field">
-            <span>高价目标</span>
+            <span>预设清仓价格</span>
             <input v-model.number="alertForm.target_high_price" data-testid="alert-target-high" type="number" min="0.01" step="0.01">
           </label>
           <label class="alert-field">
-            <span>低价目标</span>
+            <span>预设抄底价格</span>
             <input v-model.number="alertForm.target_low_price" data-testid="alert-target-low" type="number" min="0.01" step="0.01">
           </label>
           <div class="alert-switches">
@@ -734,11 +734,11 @@ onUnmounted(() => {
             </label>
             <label>
               <input v-model="alertForm.notify_on_custom_high" data-testid="alert-custom-high" type="checkbox">
-              <span>高价</span>
+              <span>清仓价</span>
             </label>
             <label>
               <input v-model="alertForm.notify_on_custom_low" data-testid="alert-custom-low" type="checkbox">
-              <span>低价</span>
+              <span>抄底价</span>
             </label>
             <label>
               <input v-model="alertForm.notify_on_predicted_high" data-testid="alert-predicted-high" type="checkbox">

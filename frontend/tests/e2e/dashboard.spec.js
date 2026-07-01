@@ -275,7 +275,8 @@ test.beforeEach(async ({ page }) => {
           ],
         },
         alerts: {
-          enabled: false,
+          enabled: true,
+          check_interval_seconds: 2,
           predicted_breakout_step_cny_g: 2,
           default_source: 'icbc',
           smtp_configured: true,
@@ -472,11 +473,18 @@ test('saves alert rule and sends test email', async ({ page }) => {
   await page.goto('/')
 
   await expect(page.getByTestId('alert-panel')).toBeVisible()
+  await expect(page.getByTestId('alert-panel')).toContainText('预设清仓价格')
+  await expect(page.getByTestId('alert-panel')).toContainText('预设抄底价格')
+  await expect(page.getByTestId('alert-panel')).toContainText('清仓价')
+  await expect(page.getByTestId('alert-panel')).toContainText('抄底价')
+  await expect(page.getByTestId('alert-enabled')).toBeChecked()
+  await expect(page.getByTestId('alert-custom-high')).toBeChecked()
+  await expect(page.getByTestId('alert-custom-low')).toBeChecked()
+  await expect(page.getByTestId('alert-predicted-high')).toBeChecked()
+  await expect(page.getByTestId('alert-predicted-low')).toBeChecked()
   await page.getByTestId('alert-email').fill('me@example.com')
   await page.getByTestId('alert-target-high').fill('900')
   await page.getByTestId('alert-target-low').fill('870')
-  await page.getByTestId('alert-custom-high').check()
-  await page.getByTestId('alert-custom-low').check()
   await page.getByTestId('alert-save').click()
 
   await expect(page.getByTestId('alert-status')).toContainText('已保存')

@@ -15,6 +15,7 @@ from backend.app.services.decision import TechnicalSignal, build_recommendation
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
 from backend.app.services.email_sender import (
     EmailConfigError,
+    EmailSendError,
     build_alert_email_message,
     build_email_config,
     send_email,
@@ -271,6 +272,8 @@ async def send_test_alert_email(payload: dict[str, Any]) -> dict[str, bool]:
         send_email(email_config, message)
     except EmailConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EmailSendError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"test email send failed: {exc}") from exc
     return {"sent": True}

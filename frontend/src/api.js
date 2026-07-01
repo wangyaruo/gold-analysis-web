@@ -1,3 +1,5 @@
+import { formatApiError } from './utils/apiErrors.js'
+
 function resolveApiBaseUrl() {
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL
@@ -30,7 +32,7 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const body = await response.text()
-    throw new Error(`${response.status} ${response.statusText}: ${body}`)
+    throw new Error(formatApiError(response, body))
   }
 
   return response.json()
