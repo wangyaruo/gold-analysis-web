@@ -46,7 +46,7 @@ const props = defineProps({
 
 // 默认可见窗口(=约10个刻度宽). 月线放宽到 12 条, 避免粗略 30 天数据造成自然月标签重复。
 const DEFAULT_WINDOW = { '1min': null, '1h': 10, '1day': 10, '1month': 12 }
-const INTRADAY_Y_TICK_COUNT = 4
+const INTRADAY_Y_AXIS_OPTIONS = { tickCount: 7, minInterval: 1, maxSplitNumber: 8 }
 
 const chartContainer = ref(null)
 let chartInstance = null
@@ -121,7 +121,7 @@ const buildOption = () => {
     vs,
     ve,
     yStopLoss,
-    useIntradayProfile.value ? INTRADAY_Y_TICK_COUNT : undefined,
+    useIntradayProfile.value ? INTRADAY_Y_AXIS_OPTIONS : undefined,
   )
   const startPct = n > 1 ? (vs / (n - 1)) * 100 : 0
   const endPct = n > 1 ? (ve / (n - 1)) * 100 : 100
@@ -452,7 +452,7 @@ const onDataZoom = () => {
     zoomStart,
     zoomEnd,
     useIntradayProfile.value ? null : props.stopLoss,
-    useIntradayProfile.value ? INTRADAY_Y_TICK_COUNT : undefined,
+    useIntradayProfile.value ? INTRADAY_Y_AXIS_OPTIONS : undefined,
   )
   chartInstance.setOption({
     xAxis: {

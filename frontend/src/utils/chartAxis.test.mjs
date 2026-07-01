@@ -541,3 +541,31 @@ assert.equal(compactYAxis.splitNumber, 3)
 assert.equal(compactYAxis.max - compactYAxis.min, compactYAxis.interval * 3)
 assert.ok(compactYAxis.min <= 863.43)
 assert.ok(compactYAxis.max >= 880.25)
+
+const compactIntradayRows = [
+  { time: '2026-06-29T09:10:00', open: 884.2, high: 884.55, low: 883.9, close: 884.4 },
+  { time: '2026-06-29T09:11:00', open: 884.4, high: 885.15, low: 884.1, close: 884.9 },
+  { time: '2026-06-29T09:12:00', open: 884.9, high: 885.35, low: 884.5, close: 885.2 },
+]
+const compactIntradayYAxis = buildYAxisScaleForRange(compactIntradayRows, 0, 2, null, {
+  minInterval: 1,
+  maxSplitNumber: 8,
+})
+assert.equal(compactIntradayYAxis.interval, 1)
+assert.equal(compactIntradayYAxis.min, 883)
+assert.equal(compactIntradayYAxis.max, 886)
+assert.equal(compactIntradayYAxis.splitNumber, 3)
+
+const wideIntradayRows = [
+  { time: '2026-06-29T09:10:00', open: 865.2, high: 866.1, low: 863.05, close: 864.8 },
+  { time: '2026-06-29T13:00:00', open: 869.8, high: 874.6, low: 868.5, close: 873.2 },
+  { time: '2026-06-29T22:30:00', open: 881.4, high: 886.69, low: 879.8, close: 883.1 },
+]
+const wideIntradayYAxis = buildYAxisScaleForRange(wideIntradayRows, 0, 2, null, {
+  minInterval: 1,
+  maxSplitNumber: 8,
+})
+assert.equal(wideIntradayYAxis.interval, 5)
+assert.ok(wideIntradayYAxis.splitNumber <= 8)
+assert.ok(wideIntradayYAxis.min <= 863.05)
+assert.ok(wideIntradayYAxis.max >= 886.69)

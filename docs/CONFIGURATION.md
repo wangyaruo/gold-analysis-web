@@ -54,11 +54,11 @@ GET /api/market/snapshot?source=eastmoney_au9999
 
 ```yaml
 realtime:
-  frontend_refresh_seconds: 10
+  frontend_refresh_seconds: 2
   max_data_delay_seconds: 5
 ```
 
-前端每 10 秒刷新一次。后端拒绝超过 5 秒的数据，防止交易视图展示过期价格。
+前端每 2 秒刷新一次。后端拒绝超过 5 秒的数据，防止交易视图展示过期价格。
 
 ## 人民币展示
 

@@ -20,7 +20,7 @@ cors:
     - "http://154.219.120.25:5178"
 
 realtime:
-  frontend_refresh_seconds: 10
+  frontend_refresh_seconds: 2
   max_data_delay_seconds: 5
 
 storage:

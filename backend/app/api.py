@@ -134,7 +134,7 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
         },
         "sentiment": sentiment.__dict__,
         "recommendation": recommendation.__dict__,
-        "refresh_seconds": realtime_config.get("frontend_refresh_seconds", 10),
+        "refresh_seconds": realtime_config.get("frontend_refresh_seconds", 2),
         "max_data_delay_seconds": max_data_delay_seconds,
     }
 

@@ -55,7 +55,7 @@ const portfolio = reactive({
 const pageBackgroundStyle = {'--page-wave-image': `url(${goldMarketWave})`}
 const priceCardStyle = {'--price-card-image': `url(${goldBarsHero})`}
 
-const refreshSeconds = computed(() => snapshot.value?.refresh_seconds || publicConfig.value?.realtime?.frontend_refresh_seconds || 10)
+const refreshSeconds = computed(() => snapshot.value?.refresh_seconds || publicConfig.value?.realtime?.frontend_refresh_seconds || 2)
 const maxDelaySeconds = computed(() => snapshot.value?.max_data_delay_seconds || publicConfig.value?.realtime?.max_data_delay_seconds || 5)
 const currentPrice = computed(() => snapshot.value?.price?.display_value || snapshot.value?.price?.value || 0)
 const rawPrice = computed(() => snapshot.value?.price?.value || 0)

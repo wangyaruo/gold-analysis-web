@@ -972,12 +972,106 @@ function roundTo(value, decimals) {
   return Math.round(value * factor) / factor
 }
 
+function normalizeYAxisOptions(tickCountOrOptions) {
+  if (tickCountOrOptions && typeof tickCountOrOptions === 'object') {
+    const tickCount = Number.isFinite(Number(tickCountOrOptions.tickCount))
+      ? Math.max(2, Math.floor(Number(tickCountOrOptions.tickCount)))
+      : Y_AXIS_TICK_COUNT
+    const fixedInterval = Number(tickCountOrOptions.fixedInterval)
+    const minInterval = Number(tickCountOrOptions.minInterval)
+    const maxSplitNumber = Number(tickCountOrOptions.maxSplitNumber)
+    return {
+      tickCount,
+      fixedInterval: Number.isFinite(fixedInterval) && fixedInterval > 0 ? fixedInterval : null,
+      minInterval: Number.isFinite(minInterval) && minInterval > 0 ? minInterval : null,
+      maxSplitNumber: Number.isFinite(maxSplitNumber) && maxSplitNumber > 0
+        ? Math.floor(maxSplitNumber)
+        : null,
+    }
+  }
+
+  const tickCount = Number.isFinite(Number(tickCountOrOptions))
+    ? Math.max(2, Math.floor(Number(tickCountOrOptions)))
+    : Y_AXIS_TICK_COUNT
+  return { tickCount, fixedInterval: null, minInterval: null, maxSplitNumber: null }
+}
+
+function buildFixedIntervalYAxisScale(allValues, fixedInterval, tickCount) {
+  if (!allValues.length) {
+    return { interval: fixedInterval, splitNumber: tickCount - 1 }
+  }
+
+  let minValue = Math.min(...allValues)
+  let maxValue = Math.max(...allValues)
+  const decimals = precisionFor(fixedInterval)
+
+  if (minValue === maxValue) {
+    minValue -= fixedInterval
+    maxValue += fixedInterval
+  }
+
+  let min = roundTo(Math.floor(minValue / fixedInterval) * fixedInterval, decimals)
+  let max = roundTo(Math.ceil(maxValue / fixedInterval) * fixedInterval, decimals)
+  let splitNumber = Math.max(1, Math.round((max - min) / fixedInterval))
+  max = roundTo(min + splitNumber * fixedInterval, decimals)
+
+  return { min, max, interval: fixedInterval, splitNumber }
+}
+
+function readableIntervalAtLeast(value, minInterval) {
+  const target = Math.max(Number(value) || 0, minInterval)
+  const exponent = Math.floor(Math.log10(target))
+  const base = 10 ** exponent
+  return [1, 2, 5, 10].map((step) => step * base).find((step) => step >= target) || 10 * base
+}
+
+function buildAdaptiveIntervalYAxisScale(allValues, minInterval, maxSplitNumber, tickCount) {
+  if (!allValues.length) {
+    return { interval: minInterval, splitNumber: Math.min(tickCount - 1, maxSplitNumber) }
+  }
+
+  let minValue = Math.min(...allValues)
+  let maxValue = Math.max(...allValues)
+  if (minValue === maxValue) {
+    minValue -= minInterval
+    maxValue += minInterval
+  }
+
+  const maxSegments = Math.max(1, maxSplitNumber || tickCount - 1)
+  let interval = readableIntervalAtLeast((maxValue - minValue) / maxSegments, minInterval)
+  let decimals = precisionFor(interval)
+  let min = roundTo(Math.floor(minValue / interval) * interval, decimals)
+  let max = roundTo(Math.ceil(maxValue / interval) * interval, decimals)
+  let splitNumber = Math.max(1, Math.round((max - min) / interval))
+
+  let guard = 0
+  while (splitNumber > maxSegments && guard < 8) {
+    interval = readableIntervalAtLeast(interval * 1.01, minInterval)
+    decimals = precisionFor(interval)
+    min = roundTo(Math.floor(minValue / interval) * interval, decimals)
+    max = roundTo(Math.ceil(maxValue / interval) * interval, decimals)
+    splitNumber = Math.max(1, Math.round((max - min) / interval))
+    guard += 1
+  }
+
+  max = roundTo(min + splitNumber * interval, decimals)
+  return { min, max, interval, splitNumber }
+}
+
 // 纵坐标固定 7 个刻度 (6 段), 整齐间隔, 完整覆盖给定数值范围
-export function buildYAxisScale(values, stopLoss = null, tickCount = Y_AXIS_TICK_COUNT) {
+export function buildYAxisScale(values, stopLoss = null, tickCountOrOptions = Y_AXIS_TICK_COUNT) {
+  const { tickCount, fixedInterval, minInterval, maxSplitNumber } = normalizeYAxisOptions(tickCountOrOptions)
   const allValues = values
     .concat(stopLoss == null ? [] : [stopLoss])
     .map(finiteNumberOrNull)
     .filter((value) => value != null)
+
+  if (fixedInterval != null) {
+    return buildFixedIntervalYAxisScale(allValues, fixedInterval, tickCount)
+  }
+  if (minInterval != null) {
+    return buildAdaptiveIntervalYAxisScale(allValues, minInterval, maxSplitNumber, tickCount)
+  }
 
   if (!allValues.length) {
     return { splitNumber: tickCount - 1 }
@@ -1010,12 +1104,12 @@ export function buildYAxisScale(values, stopLoss = null, tickCount = Y_AXIS_TICK
 }
 
 // 给定可见区间 [startIdx, endIdx], 用区间内 OHLC 重算纵轴 (拖动时调用)
-export function buildYAxisScaleForRange(data, startIdx, endIdx, stopLoss = null, tickCount = Y_AXIS_TICK_COUNT) {
+export function buildYAxisScaleForRange(data, startIdx, endIdx, stopLoss = null, tickCountOrOptions = Y_AXIS_TICK_COUNT) {
   const s = Math.max(0, Math.floor(startIdx))
   const e = Math.min(data.length - 1, Math.ceil(endIdx))
   const slice = data.slice(s, e + 1)
   const values = slice.flatMap((c) => [c.open, c.high, c.low, c.close])
-  return buildYAxisScale(values, stopLoss, tickCount)
+  return buildYAxisScale(values, stopLoss, tickCountOrOptions)
 }
 
 export function formatYAxisValue(value, interval) {

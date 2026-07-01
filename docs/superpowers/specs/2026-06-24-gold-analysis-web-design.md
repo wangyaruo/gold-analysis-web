@@ -10,7 +10,7 @@ Frontend lives in `frontend/` as a Vue 3 + Vite app. Backend lives in `backend/`
 
 ## Data Flow
 
-The browser polls `/api/market/snapshot` every 10 seconds. The backend fetches a price tick from the active configured provider, validates freshness within 5 seconds, computes indicators and recommendation state, fetches or falls back to demo news, analyzes sentiment, and returns one consolidated snapshot.
+The browser polls `/api/market/snapshot` every 2 seconds. The backend fetches a price tick from the active configured provider, validates freshness within 5 seconds, computes indicators and recommendation state, fetches or falls back to demo news, analyzes sentiment, and returns one consolidated snapshot.
 
 ## Resilience
 

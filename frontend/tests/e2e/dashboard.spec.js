@@ -47,7 +47,7 @@ const snapshot = {
     reasons: ['MA golden cross', 'price broke above Bollinger upper band', 'news sentiment is positive'],
     risks: [],
   },
-  refresh_seconds: 10,
+  refresh_seconds: 2,
   max_data_delay_seconds: 5,
 }
 
@@ -250,7 +250,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/config/public', async (route) => {
     await route.fulfill({
       json: {
-        realtime: { frontend_refresh_seconds: 10, max_data_delay_seconds: 5 },
+        realtime: { frontend_refresh_seconds: 2, max_data_delay_seconds: 5 },
         portfolio_defaults: { buy_price: 540, quantity: 2 },
         display: { currency: 'CNY', unit: 'g' },
         data_sources: {
@@ -319,6 +319,7 @@ test('renders realtime market snapshot and recommendation', async ({ page }) => 
   await expect(page.getByTestId('connection-status')).toContainText('已连接')
   await expect(page.getByTestId('current-price')).toContainText('552.05')
   await expect(page.getByTestId('price-source-name')).toContainText('工商银行积存金')
+  await expect(page.locator('.price-meta')).toContainText('刷新 2s')
   await expect(page.locator('.brand-logo-img')).toBeVisible()
   await expect(page.locator('.asset-icon-tile img')).toHaveCount(2)
   await expect(page.locator('.period-tab')).toHaveText(['分线', '日线', '月线'])
