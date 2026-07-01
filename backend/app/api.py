@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timezone
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from backend.app.core.auth import require_bearer_token
 from backend.app.core.config import load_config
 from backend.app.core.logging import log_event
-from backend.app.services.alerts import AlertStore, rule_to_dict, state_to_dict
+from backend.app.services.alerts import AlertStore, AlertSubscriber, mask_email, rule_to_dict, state_to_dict
 from backend.app.services.data_provider import MarketDataError, PriceProvider
 from backend.app.services.decision import TechnicalSignal, build_recommendation
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
@@ -18,10 +20,12 @@ from backend.app.services.email_sender import (
     EmailSendError,
     build_alert_email_message,
     build_email_config,
+    build_verification_email_message,
     send_email,
 )
 from backend.app.services.indicators import compute_stop_loss
 from backend.app.services.kline_store import KlineStore
+from backend.app.services.factors import build_market_factors
 from backend.app.services.market_math import (
     compute_volatility,
     detect_bollinger_breakout,
@@ -162,6 +166,24 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
     }
 
 
+@router.get("/market/factors", dependencies=[Depends(require_bearer_token)])
+async def market_factors(source: Optional[str] = None) -> dict[str, Any]:
+    config = load_config()
+    try:
+        _provider.source_config(source or None)
+        articles = await fetch_news_articles(config)
+        return await build_market_factors(
+            source=source,
+            config=config,
+            provider=_provider,
+            articles=articles,
+        )
+    except MarketDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"market factors fetch failed: {exc}") from exc
+
+
 @router.get("/market/klines", dependencies=[Depends(require_bearer_token)])
 async def market_klines(period: str = "1day", source: Optional[str] = None) -> dict[str, Any]:
     try:
@@ -210,13 +232,80 @@ async def portfolio_pnl(payload: dict[str, float]) -> dict[str, float]:
     return result.__dict__
 
 
+async def _require_alert_subscriber(x_alert_session: str = Header("", alias="X-Alert-Session")) -> AlertSubscriber:
+    subscriber = _alert_store.get_subscriber_by_token(x_alert_session)
+    if not subscriber:
+        raise HTTPException(status_code=401, detail="alert session is required")
+    return subscriber
+
+
+@router.post("/alerts/session/request-code", dependencies=[Depends(require_bearer_token)])
+async def request_alert_session_code(payload: dict[str, Any]) -> dict[str, Any]:
+    email = _validate_alert_email(payload.get("email"))
+    config = load_config()
+    expires_minutes = max(1, int(config.get("alerts", {}).get("verification_code_minutes", 10)))
+    code = _generate_verification_code()
+    expires_at = _utc_text(datetime.now(timezone.utc) + timedelta(minutes=expires_minutes))
+    _alert_store.upsert_subscriber_verification(
+        email,
+        code_hash=_hash_verification_code(email, code),
+        expires_at=expires_at,
+    )
+    try:
+        email_config = build_email_config(config.get("alerts", {}).get("email", {}))
+        message = build_verification_email_message(
+            recipient_email=email,
+            from_email=email_config.from_email,
+            code=code,
+            expires_minutes=expires_minutes,
+        )
+        send_email(email_config, message)
+    except EmailConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EmailSendError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"verification email send failed: {exc}") from exc
+    return {"sent": True, "subscriber": {"email": mask_email(email)}}
+
+
+@router.post("/alerts/session/verify", dependencies=[Depends(require_bearer_token)])
+async def verify_alert_session(payload: dict[str, Any]) -> dict[str, Any]:
+    email = _validate_alert_email(payload.get("email"))
+    code = str(payload.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="verification code is required")
+    config = load_config()
+    try:
+        subscriber = _alert_store.verify_subscriber(
+            email,
+            code_hash=_hash_verification_code(email, code),
+            session_token=_generate_alert_session_token(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    _alert_store.ensure_default_rules_for_subscriber(
+        subscriber,
+        default_source=_default_alert_source(config),
+    )
+    return {
+        "session_token": subscriber.session_token,
+        "subscriber": {"email": mask_email(subscriber.email)},
+    }
+
+
+@router.get("/alerts/session/me", dependencies=[Depends(require_bearer_token)])
+async def get_alert_session(subscriber: AlertSubscriber = Depends(_require_alert_subscriber)) -> dict[str, Any]:
+    return {"subscriber": {"email": mask_email(subscriber.email)}}
+
+
 @router.get("/alerts/rules", dependencies=[Depends(require_bearer_token)])
-async def list_alert_rules() -> dict[str, Any]:
+async def list_alert_rules(subscriber: AlertSubscriber = Depends(_require_alert_subscriber)) -> dict[str, Any]:
     rules = []
-    for rule in _alert_store.list_rules():
+    for rule in _alert_store.list_rules(subscriber_id=subscriber.id):
         state = _alert_store.latest_state_for_rule(int(rule.id or 0))
         rules.append({
-            **rule_to_dict(rule),
+            **_public_rule_dict(rule),
             "state": state_to_dict(state) if state else None,
         })
     return {
@@ -226,39 +315,49 @@ async def list_alert_rules() -> dict[str, Any]:
 
 
 @router.post("/alerts/rules", dependencies=[Depends(require_bearer_token)])
-async def create_alert_rule(payload: dict[str, Any]) -> dict[str, Any]:
+async def create_alert_rule(
+    payload: dict[str, Any],
+    subscriber: AlertSubscriber = Depends(_require_alert_subscriber),
+) -> dict[str, Any]:
     _validate_alert_rule_payload(payload)
-    rule = _alert_store.create_rule(payload)
-    return {"rule": rule_to_dict(rule)}
+    rule = _alert_store.create_rule(payload, subscriber=subscriber)
+    return {"rule": _public_rule_dict(rule)}
 
 
 @router.put("/alerts/rules/{rule_id}", dependencies=[Depends(require_bearer_token)])
-async def update_alert_rule(rule_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+async def update_alert_rule(
+    rule_id: int,
+    payload: dict[str, Any],
+    subscriber: AlertSubscriber = Depends(_require_alert_subscriber),
+) -> dict[str, Any]:
     _validate_alert_rule_payload(payload, partial=True)
-    rule = _alert_store.update_rule(rule_id, payload)
+    rule = _alert_store.update_rule(rule_id, payload, subscriber_id=subscriber.id)
     if not rule:
         raise HTTPException(status_code=404, detail="alert rule not found")
-    return {"rule": rule_to_dict(rule)}
+    return {"rule": _public_rule_dict(rule)}
 
 
 @router.delete("/alerts/rules/{rule_id}", dependencies=[Depends(require_bearer_token)])
-async def delete_alert_rule(rule_id: int) -> dict[str, bool]:
-    deleted = _alert_store.delete_rule(rule_id)
+async def delete_alert_rule(
+    rule_id: int,
+    subscriber: AlertSubscriber = Depends(_require_alert_subscriber),
+) -> dict[str, bool]:
+    deleted = _alert_store.delete_rule(rule_id, subscriber_id=subscriber.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="alert rule not found")
     return {"deleted": True}
 
 
 @router.post("/alerts/test-email", dependencies=[Depends(require_bearer_token)])
-async def send_test_alert_email(payload: dict[str, Any]) -> dict[str, bool]:
-    recipient = str(payload.get("recipient_email") or "").strip()
-    if not recipient:
-        raise HTTPException(status_code=422, detail="recipient_email is required")
+async def send_test_alert_email(
+    payload: dict[str, Any],
+    subscriber: AlertSubscriber = Depends(_require_alert_subscriber),
+) -> dict[str, bool]:
     config = load_config()
     try:
         email_config = build_email_config(config.get("alerts", {}).get("email", {}))
         message = build_alert_email_message(
-            recipient_email=recipient,
+            recipient_email=subscriber.email,
             from_email=email_config.from_email,
             alert_kind="test",
             source_label=str(payload.get("source_label") or "测试行情源"),
@@ -270,6 +369,8 @@ async def send_test_alert_email(payload: dict[str, Any]) -> dict[str, bool]:
             rule_id=None,
         )
         send_email(email_config, message)
+        if subscriber.id is not None:
+            _alert_store.mark_test_email_sent(subscriber.id)
     except EmailConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except EmailSendError as exc:
@@ -454,10 +555,49 @@ def _smtp_configured(config: dict[str, Any]) -> bool:
         return False
 
 
+def _public_rule_dict(rule: Any) -> dict[str, Any]:
+    data = rule_to_dict(rule)
+    data["recipient_email"] = mask_email(str(data.get("recipient_email") or ""))
+    data.pop("subscriber_id", None)
+    return data
+
+
+def _default_alert_source(config: dict[str, Any]) -> str:
+    return str(config.get("alerts", {}).get("default_source") or config.get("data_sources", {}).get("active") or "demo")
+
+
+def _validate_alert_email(value: Any) -> str:
+    email = str(value or "").strip().lower()
+    local, separator, domain = email.partition("@")
+    if not local or separator != "@" or "." not in domain:
+        raise HTTPException(status_code=422, detail="valid email is required")
+    return email
+
+
+def _generate_verification_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _generate_alert_session_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _hash_verification_code(email: str, code: str) -> str:
+    normalized_email = str(email or "").strip().lower()
+    normalized_code = str(code or "").strip()
+    return hashlib.sha256(f"{normalized_email}:{normalized_code}".encode("utf-8")).hexdigest()
+
+
+def _utc_text(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def _validate_alert_rule_payload(payload: dict[str, Any], *, partial: bool = False) -> None:
     if not partial or "recipient_email" in payload:
         recipient = str(payload.get("recipient_email") or "").strip()
-        if not recipient:
+        if recipient and "@" not in recipient:
+            raise HTTPException(status_code=422, detail="recipient_email must be a valid email")
+        if not partial and "recipient_email" in payload and not recipient:
             raise HTTPException(status_code=422, detail="recipient_email is required")
     for field in ("target_high_price", "target_low_price"):
         if field not in payload or payload.get(field) in (None, ""):

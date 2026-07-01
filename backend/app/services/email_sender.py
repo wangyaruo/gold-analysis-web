@@ -121,6 +121,32 @@ def build_alert_email_message(
     return message
 
 
+def build_verification_email_message(
+    *,
+    recipient_email: str,
+    from_email: str,
+    code: str,
+    expires_minutes: int,
+) -> EmailMessage:
+    message = EmailMessage()
+    message["Subject"] = "黄金价格-波动通知：邮箱验证码"
+    message["From"] = formataddr((DEFAULT_FROM_NAME, from_email))
+    message["To"] = recipient_email
+    message.set_content(
+        "\n".join(
+            [
+                "你正在为黄金价格提醒绑定邮箱。",
+                "",
+                f"验证码：{code}",
+                f"有效期：{expires_minutes} 分钟",
+                "",
+                "如果不是你本人操作，可以忽略这封邮件。",
+            ]
+        )
+    )
+    return message
+
+
 def send_email(config: EmailConfig, message: EmailMessage) -> None:
     stage = "connect"
     try:

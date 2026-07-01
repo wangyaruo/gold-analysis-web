@@ -67,6 +67,7 @@ alerts:
   enabled: true
   check_interval_seconds: 2
   predicted_breakout_step_cny_g: 2
+  verification_code_minutes: 10
   storage_path: "data/price_alerts.sqlite"
   default_source: "icbc"
   email:
@@ -83,9 +84,14 @@ alerts:
 - `enabled`: 是否启动后端邮件提醒 worker。默认开启。
 - `check_interval_seconds`: worker 检查行情和提醒规则的间隔，默认 2 秒。
 - `predicted_breakout_step_cny_g`: 系统预估高低点首次触达后，价格每继续突破多少 `CNY/g` 再次提醒。默认 `2`。
+- `verification_code_minutes`: 用户绑定收件邮箱时，验证码有效期分钟数。默认 `10`。
 - `storage_path`: 提醒规则和触发状态的 SQLite 文件路径。
 - `default_source`: 新建提醒规则时默认使用的行情源。
 - `email.*_env`: SMTP 配置对应的环境变量名。真实邮箱密码、授权码和发件地址只写环境变量，不写入 `config.yaml`。
+
+部署后多人使用时，提醒规则按“已验证邮箱”隔离。用户先在前端输入收件邮箱并接收验证码，验证成功后才能保存、删除、测试自己的提醒规则；接口返回的邮箱会脱敏展示，例如 `me***@example.com`。
+
+当前统一默认规则暂时写在后端代码中：新邮箱验证成功后，如果名下还没有任何提醒规则，会自动获得一条启用的默认规则，默认行情源使用 `alerts.default_source`，清仓价、抄底价、预估高点、预估低点四个提醒开关全部打开。
 
 SMTP 环境变量示例：
 
@@ -234,3 +240,19 @@ AND confidence >= min_confidence
 - 分数达到 `positive_threshold` 标记为 positive。
 - 分数低于或等于 `negative_threshold` 标记为 negative。
 - 其他情况为 neutral。
+
+## 黄金影响因子榜
+
+`GET /api/market/factors` 会把银行积存金、上金所 Au99.99、FRED 宏观序列、NewsAPI 新闻关键词和可选 Twelve Data 国际金价统一成影响因子榜。
+
+第一版只用于前端解释，不改变结构化建议的买入/不买入动作。信号口径固定为银行积存金人民币/克：
+
+- 银行价、上金所 Au99.99、USD/CNY、通胀预期、VIX 上行偏利好。
+- 美元指数、美国实际利率上行偏利空。
+- 降息、央行购金、避险关键词偏利好；加息、鹰派、风险偏好回升偏利空。
+
+数据源降级：
+
+- FRED CSV 和上金所延时行情失败时，对应因子返回 `status: unavailable`，不会用假数据填充。
+- 未配置 `TWELVE_DATA_KEY` 时，国际金价因子显示为未配置，不参与高权重排序。
+- 未配置 `NEWS_API_KEY` 时，新闻型因子使用 `config.yaml` 中的 `news.demo_articles`。

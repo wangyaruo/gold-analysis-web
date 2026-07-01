@@ -49,6 +49,13 @@ export function getMarketSnapshot(source) {
   return request(`/api/market/snapshot${query ? `?${query}` : ''}`)
 }
 
+export function getMarketFactors(source) {
+  const params = new URLSearchParams()
+  if (source) params.set('source', source)
+  const query = params.toString()
+  return request(`/api/market/factors${query ? `?${query}` : ''}`)
+}
+
 export function getKlines(period, source) {
   const params = new URLSearchParams()
   if (period) params.set('period', period)
@@ -83,33 +90,57 @@ export function calculatePnl(payload) {
   })
 }
 
-export function getAlertRules() {
-  return request('/api/alerts/rules')
+function alertSessionHeaders(sessionToken) {
+  return sessionToken ? {'X-Alert-Session': sessionToken} : {}
 }
 
-export function createAlertRule(payload) {
+export function requestAlertCode(email) {
+  return request('/api/alerts/session/request-code', {
+    method: 'POST',
+    body: JSON.stringify({email}),
+  })
+}
+
+export function verifyAlertCode(email, code) {
+  return request('/api/alerts/session/verify', {
+    method: 'POST',
+    body: JSON.stringify({email, code}),
+  })
+}
+
+export function getAlertRules(sessionToken) {
+  return request('/api/alerts/rules', {
+    headers: alertSessionHeaders(sessionToken),
+  })
+}
+
+export function createAlertRule(payload, sessionToken) {
   return request('/api/alerts/rules', {
     method: 'POST',
+    headers: alertSessionHeaders(sessionToken),
     body: JSON.stringify(payload),
   })
 }
 
-export function updateAlertRule(id, payload) {
+export function updateAlertRule(id, payload, sessionToken) {
   return request(`/api/alerts/rules/${id}`, {
     method: 'PUT',
+    headers: alertSessionHeaders(sessionToken),
     body: JSON.stringify(payload),
   })
 }
 
-export function deleteAlertRule(id) {
+export function deleteAlertRule(id, sessionToken) {
   return request(`/api/alerts/rules/${id}`, {
     method: 'DELETE',
+    headers: alertSessionHeaders(sessionToken),
   })
 }
 
-export function sendTestEmail(payload) {
+export function sendTestEmail(payload, sessionToken) {
   return request('/api/alerts/test-email', {
     method: 'POST',
+    headers: alertSessionHeaders(sessionToken),
     body: JSON.stringify(payload),
   })
 }

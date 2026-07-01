@@ -22,7 +22,7 @@ from backend.app.services.pnl import calculate_pnl
 from backend.app.services.predicted_range import build_predicted_daily_range, build_today_range
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import PriceTick, validate_price_tick
-from backend.app.services.alerts import AlertRule, AlertState, AlertStore, evaluate_alert_rule
+from backend.app.services.alerts import AlertRule, AlertState, AlertStore, evaluate_alert_rule, mask_email
 from backend.app.services.email_sender import (
     EmailConfig,
     EmailConfigError,
@@ -337,6 +337,106 @@ class AlertRuleTests(unittest.TestCase):
         self.assertIsNone(store.get_state(rule.id, "icbc", "2026-07-02").last_predicted_high_alert_price)
         store.close()
 
+    def test_alert_store_verifies_subscriber_and_scopes_rules(self):
+        store = AlertStore(":memory:")
+        store.upsert_subscriber_verification(
+            "ME@Example.COM",
+            code_hash="123456",
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        subscriber = store.verify_subscriber(
+            "me@example.com",
+            code_hash="123456",
+            session_token="session-a",
+        )
+        other = store.upsert_subscriber_verification(
+            "friend@example.com",
+            code_hash="654321",
+            expires_at="2099-01-01T00:00:00Z",
+        )
+
+        rule = store.create_rule(
+            {
+                "source": "icbc",
+                "recipient_email": "ignored@example.com",
+                "target_high_price": 900,
+                "notify_on_custom_high": True,
+            },
+            subscriber=subscriber,
+        )
+        store.create_rule(
+            {
+                "source": "icbc",
+                "recipient_email": "friend@example.com",
+                "target_high_price": 910,
+                "notify_on_custom_high": True,
+            },
+            subscriber=other,
+        )
+
+        self.assertEqual(subscriber.email, "me@example.com")
+        self.assertEqual(mask_email(subscriber.email), "me***@example.com")
+        self.assertEqual(rule.recipient_email, "me@example.com")
+        self.assertEqual([item.id for item in store.list_rules(subscriber_id=subscriber.id)], [rule.id])
+        self.assertIsNone(store.update_rule(rule.id, {"target_high_price": 901}, subscriber_id=other.id))
+        self.assertFalse(store.delete_rule(rule.id, subscriber_id=other.id))
+        store.close()
+
+    def test_delivery_rules_exclude_legacy_rules_without_verified_subscriber(self):
+        store = AlertStore(":memory:")
+        legacy_rule = store.create_rule(
+            {
+                "source": "icbc",
+                "recipient_email": "legacy@example.com",
+                "target_high_price": 900,
+                "notify_on_custom_high": True,
+            }
+        )
+        store.upsert_subscriber_verification(
+            "me@example.com",
+            code_hash="123456",
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        subscriber = store.verify_subscriber("me@example.com", code_hash="123456", session_token="session-a")
+        scoped_rule = store.create_rule(
+            {
+                "source": "icbc",
+                "target_high_price": 910,
+                "notify_on_custom_high": True,
+            },
+            subscriber=subscriber,
+        )
+
+        self.assertEqual([rule.id for rule in store.list_rules()], [legacy_rule.id, scoped_rule.id])
+        self.assertEqual([rule.id for rule in store.list_delivery_rules()], [scoped_rule.id])
+        store.close()
+
+    def test_default_alert_rules_are_seeded_once_for_verified_subscriber(self):
+        store = AlertStore(":memory:")
+        store.upsert_subscriber_verification(
+            "me@example.com",
+            code_hash="123456",
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        subscriber = store.verify_subscriber("me@example.com", code_hash="123456", session_token="session-a")
+
+        created = store.ensure_default_rules_for_subscriber(subscriber, default_source="icbc")
+        created_again = store.ensure_default_rules_for_subscriber(subscriber, default_source="icbc")
+        rules = store.list_rules(subscriber_id=subscriber.id)
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created_again, [])
+        self.assertEqual(len(rules), 1)
+        self.assertTrue(rules[0].enabled)
+        self.assertEqual(rules[0].source, "icbc")
+        self.assertIsNone(rules[0].target_high_price)
+        self.assertIsNone(rules[0].target_low_price)
+        self.assertTrue(rules[0].notify_on_custom_high)
+        self.assertTrue(rules[0].notify_on_custom_low)
+        self.assertTrue(rules[0].notify_on_predicted_high)
+        self.assertTrue(rules[0].notify_on_predicted_low)
+        store.close()
+
 
 class EmailSenderTests(unittest.TestCase):
     def test_email_config_requires_smtp_host(self):
@@ -566,29 +666,84 @@ class AlertApiTests(unittest.TestCase):
         self.store.close()
 
     def test_alert_rule_api_creates_and_lists_rule(self):
+        subscriber = self.store.upsert_subscriber_verification(
+            "me@example.com",
+            code_hash="123456",
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        subscriber = self.store.verify_subscriber("me@example.com", code_hash="123456", session_token="session-a")
+        session_headers = {**self.headers, "X-Alert-Session": subscriber.session_token}
+
+        blocked = self.client.get("/api/alerts/rules", headers=self.headers)
+        self.assertEqual(blocked.status_code, 401)
+
         response = self.client.post(
             "/api/alerts/rules",
             json={
                 "source": "icbc",
-                "recipient_email": "me@example.com",
                 "target_high_price": 900,
                 "notify_on_custom_high": True,
                 "notify_on_predicted_high": True,
             },
-            headers=self.headers,
+            headers=session_headers,
         )
 
         self.assertEqual(response.status_code, 200)
         created = response.json()["rule"]
-        self.assertEqual(created["recipient_email"], "me@example.com")
+        self.assertEqual(created["recipient_email"], "me***@example.com")
         self.assertEqual(created["target_high_price"], 900.0)
 
-        list_response = self.client.get("/api/alerts/rules", headers=self.headers)
+        list_response = self.client.get("/api/alerts/rules", headers=session_headers)
 
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(list_response.json()["rules"][0]["id"], created["id"])
 
+    def test_alert_session_request_and_verify(self):
+        sent = []
+
+        def fake_send(config, message):
+            sent.append(message.get_content())
+
+        with (
+            patch.object(api_module, "_generate_verification_code", return_value="123456"),
+            patch.object(api_module, "build_email_config", return_value=EmailConfig(host="smtp.example.test", port=587, username="", password="", from_email="alerts@example.test")),
+            patch.object(api_module, "send_email", side_effect=fake_send),
+        ):
+            request_response = self.client.post(
+                "/api/alerts/session/request-code",
+                json={"email": "me@example.com"},
+                headers=self.headers,
+            )
+            verify_response = self.client.post(
+                "/api/alerts/session/verify",
+                json={"email": "me@example.com", "code": "123456"},
+                headers=self.headers,
+            )
+
+        self.assertEqual(request_response.status_code, 200)
+        self.assertIn("123456", sent[0])
+        self.assertEqual(verify_response.status_code, 200)
+        self.assertEqual(verify_response.json()["subscriber"]["email"], "me***@example.com")
+        self.assertTrue(verify_response.json()["session_token"])
+
+        list_response = self.client.get(
+            "/api/alerts/rules",
+            headers={**self.headers, "X-Alert-Session": verify_response.json()["session_token"]},
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()["rules"]), 1)
+        self.assertTrue(list_response.json()["rules"][0]["notify_on_custom_high"])
+        self.assertTrue(list_response.json()["rules"][0]["notify_on_custom_low"])
+        self.assertTrue(list_response.json()["rules"][0]["notify_on_predicted_high"])
+        self.assertTrue(list_response.json()["rules"][0]["notify_on_predicted_low"])
+
     def test_test_email_api_returns_send_error_detail(self):
+        subscriber = self.store.upsert_subscriber_verification(
+            "me@example.com",
+            code_hash="123456",
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        subscriber = self.store.verify_subscriber("me@example.com", code_hash="123456", session_token="session-a")
         with (
             patch.object(
                 api_module,
@@ -605,8 +760,8 @@ class AlertApiTests(unittest.TestCase):
         ):
             response = self.client.post(
                 "/api/alerts/test-email",
-                json={"recipient_email": "me@example.com"},
-                headers=self.headers,
+                json={},
+                headers={**self.headers, "X-Alert-Session": subscriber.session_token},
             )
 
         self.assertEqual(response.status_code, 502)
@@ -1473,6 +1628,159 @@ class SentimentTests(unittest.TestCase):
 
         self.assertEqual(result.label, "positive")
         self.assertEqual(result.score, 2)
+
+
+class MarketFactorTests(unittest.TestCase):
+    def test_parse_fred_csv_uses_latest_two_valid_observations(self):
+        from backend.app.services.factors import parse_fred_csv
+
+        parsed = parse_fred_csv(
+            "DATE,DFII10\n"
+            "2026-06-25,2.19\n"
+            "2026-06-26,2.18\n"
+            "2026-06-27,.\n"
+            "2026-06-29,2.16\n",
+            "DFII10",
+        )
+
+        self.assertEqual(parsed["date"], "2026-06-29")
+        self.assertEqual(parsed["value"], 2.16)
+        self.assertEqual(parsed["previous_value"], 2.18)
+        self.assertAlmostEqual(parsed["change"], -0.02, places=6)
+
+    def test_parse_sge_delayed_quotes_extracts_au9999_latest_quote(self):
+        from backend.app.services.factors import parse_sge_au9999
+
+        parsed = parse_sge_au9999(
+            """
+            <h1>上海黄金交易所2026年07月02日延时行情</h1>
+            <table>
+              <tr><th>合约</th><th>最新价</th><th>最高价</th><th>最低价</th><th>今开盘</th></tr>
+              <tr>
+                <td>Au99.99</td>
+                <td><span class="colorRed">890.0</span></td>
+                <td class="colorRed">896.0</td>
+                <td class="colorRed">874.2</td>
+                <td class="colorRed">882.0</td>
+              </tr>
+            </table>
+            """
+        )
+
+        self.assertEqual(parsed["contract"], "Au99.99")
+        self.assertEqual(parsed["date"], "2026-07-02")
+        self.assertEqual(parsed["value"], 890.0)
+        self.assertEqual(parsed["open"], 882.0)
+        self.assertEqual(parsed["high"], 896.0)
+        self.assertEqual(parsed["low"], 874.2)
+        self.assertEqual(parsed["change"], 8.0)
+
+    def test_directional_factor_uses_rmb_gold_signal_rules(self):
+        from backend.app.services.factors import build_directional_factor
+
+        usd_cny = build_directional_factor(
+            key="usd_cny",
+            label="美元兑人民币",
+            value=6.81,
+            change=0.04,
+            unit="",
+            positive_when="up",
+            source_name="FRED DEXCHUS",
+            updated_at="2026-06-26",
+            explanation="美元兑人民币上行会抬高人民币计价黄金。",
+        )
+        real_yield = build_directional_factor(
+            key="real_yield",
+            label="美国实际利率",
+            value=2.16,
+            change=0.03,
+            unit="%",
+            positive_when="down",
+            source_name="FRED DFII10",
+            updated_at="2026-06-29",
+            explanation="实际利率上行会增加持有黄金的机会成本。",
+        )
+
+        self.assertEqual(usd_cny["signal"], "positive")
+        self.assertEqual(real_yield["signal"], "negative")
+        self.assertGreater(usd_cny["strength"], 0)
+        self.assertGreater(real_yield["strength"], 0)
+
+    def test_rank_factor_items_keeps_top_six_by_absolute_impact(self):
+        from backend.app.services.factors import rank_factor_items
+
+        items = [
+            {"key": f"factor_{index}", "strength": strength, "status": "ok", "signal": "positive"}
+            for index, strength in enumerate([0.1, 0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 0.6], start=1)
+        ]
+
+        ranked = rank_factor_items(items, limit=6)
+
+        self.assertEqual([item["key"] for item in ranked], [
+            "factor_2",
+            "factor_4",
+            "factor_6",
+            "factor_8",
+            "factor_7",
+            "factor_5",
+        ])
+
+    def test_rank_factor_items_prefers_available_neutral_items_over_unavailable_items(self):
+        from backend.app.services.factors import rank_factor_items
+
+        ranked = rank_factor_items([
+            {"key": "unconfigured_xau", "strength": 0, "status": "unavailable", "signal": "neutral"},
+            {"key": "neutral_news", "strength": 0, "status": "ok", "signal": "neutral"},
+        ])
+
+        self.assertEqual([item["key"] for item in ranked], ["neutral_news", "unconfigured_xau"])
+
+
+class MarketFactorApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+        self.headers = {"Authorization": "Bearer change-me-local-token"}
+
+    def test_market_factor_api_requires_bearer_token(self):
+        response = self.client.get("/api/market/factors?source=icbc")
+
+        self.assertNotEqual(response.status_code, 200)
+
+    def test_market_factor_api_returns_factor_payload_for_selected_source(self):
+        payload = {
+            "generated_at": "2026-07-02T10:00:00+08:00",
+            "basis": "银行积存金 CNY/g",
+            "overall_bias": {"signal": "positive", "score": 1.4},
+            "items": [
+                {
+                    "key": "bank_price",
+                    "label": "银行积存金",
+                    "value": 894.7,
+                    "change": 4.7,
+                    "unit": "CNY/g",
+                    "signal": "positive",
+                    "strength": 4.7,
+                    "source_name": "工商银行积存金",
+                    "updated_at": "2026-07-02T10:00:00+08:00",
+                    "explanation": "当前银行报价走高。",
+                    "status": "ok",
+                }
+            ],
+        }
+
+        async def fake_build_market_factors(*, source, config, provider, articles=None):
+            self.assertEqual(source, "icbc")
+            self.assertIs(provider, api_module._provider)
+            self.assertIsInstance(config, dict)
+            self.assertIsInstance(articles, list)
+            return payload
+
+        with patch.object(api_module, "build_market_factors", side_effect=fake_build_market_factors, create=True):
+            response = self.client.get("/api/market/factors?source=icbc", headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["basis"], "银行积存金 CNY/g")
+        self.assertEqual(response.json()["items"][0]["signal"], "positive")
 
 
 class DecisionTests(unittest.TestCase):

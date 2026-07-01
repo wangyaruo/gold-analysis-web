@@ -54,7 +54,7 @@ async def run_alert_check(
     kline_store: KlineStore,
     send_email_func: SendEmailFunc = send_email,
 ) -> list[AlertEvent]:
-    rules = [rule for rule in store.list_rules() if rule.enabled]
+    rules = [rule for rule in store.list_delivery_rules() if rule.enabled]
     if not rules:
         return []
 

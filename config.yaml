@@ -27,6 +27,7 @@ alerts:
   enabled: true
   check_interval_seconds: 2
   predicted_breakout_step_cny_g: 2
+  verification_code_minutes: 10
   storage_path: "data/price_alerts.sqlite"
   default_source: "icbc"
   email:

@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   Bell,
   Calculator,
-  ChevronRight,
   Clock3,
   Database,
   Gauge,
@@ -28,11 +27,14 @@ import {
   deleteAlertRule,
   getAlertRules,
   getKlines,
+  getMarketFactors,
   getMarketSnapshot,
   getMonthlyReviews,
   getPublicConfig,
+  requestAlertCode,
   sendTestEmail,
   updateAlertRule,
+  verifyAlertCode,
 } from './api'
 import goldBarsHero from './assets/ui/gold-bars-hero.jpg'
 import goldMarketWave from './assets/ui/gold-market-wave.jpg'
@@ -57,6 +59,8 @@ const realtimeTicks = ref([])
 const klinesLoading = ref(false)
 const monthlyReviews = ref([])
 const monthlyReviewLoading = ref(false)
+const marketFactors = ref(null)
+const factorsLoading = ref(false)
 const selectedPeriod = ref('1min')
 const klineResetKey = ref(0)
 const periodOptions = [
@@ -75,6 +79,11 @@ const alertRuleId = ref(null)
 const alertLoading = ref(false)
 const alertSaving = ref(false)
 const alertStatus = ref('')
+const alertVerificationSending = ref(false)
+const alertSessionToken = ref('')
+const alertSubscriberEmail = ref('')
+const alertVerificationEmail = ref('')
+const alertVerificationCode = ref('')
 const alertForm = reactive({
   enabled: true,
   source: '',
@@ -158,17 +167,46 @@ const gaugeMood = computed(() => {
   return '极度看空'
 })
 
-const newsIcons = [LineChart, Globe, TrendingUp, Activity]
-const newsItems = computed(() => {
-  const articles = snapshot.value?.news?.articles || publicConfig.value?.news?.demo_articles || []
-  return articles.slice(0, 4).map((item, index) => ({
-    id: item.id ?? index,
-    title: item.title || item.headline || '黄金市场动态',
-    sentiment: item.sentiment || 'positive',
-    time: item.published_at || item.time || '',
-    icon: newsIcons[index % newsIcons.length],
+const factorIcons = [LineChart, Globe, TrendingUp, Activity, Database, Gauge]
+const factorItems = computed(() => {
+  const items = marketFactors.value?.items || []
+  return items.map((item, index) => ({
+    ...item,
+    id: item.key || index,
+    icon: factorIcons[index % factorIcons.length],
   }))
 })
+const factorBiasLabel = computed(() => signalLabel(marketFactors.value?.overall_bias?.signal || 'neutral'))
+const factorBiasClass = computed(() => signalClass(marketFactors.value?.overall_bias?.signal || 'neutral'))
+
+function signalLabel(signal, status = 'ok') {
+  if (status !== 'ok') return '数据延迟'
+  if (signal === 'positive') return '利好'
+  if (signal === 'negative') return '利空'
+  return '中性'
+}
+
+function signalClass(signal, status = 'ok') {
+  if (status !== 'ok') return 'tag-stale'
+  if (signal === 'positive') return 'tag-positive'
+  if (signal === 'negative') return 'tag-negative'
+  return 'tag-neutral'
+}
+
+function formatFactorChange(item) {
+  if (item?.change === null || item?.change === undefined) return '--'
+  const value = Number(item.change)
+  if (!Number.isFinite(value)) return '--'
+  const sign = value > 0 ? '+' : ''
+  const decimals = Math.abs(value) >= 10 ? 1 : 2
+  return `${sign}${value.toFixed(decimals)}${item.unit ? ` ${item.unit}` : ''}`
+}
+
+function factorMeta(item) {
+  const source = item?.source_name || '数据源'
+  if (!item?.updated_at) return source
+  return `${source} · ${item.updated_at}`
+}
 
 const connectionLabel = computed(() => {
   if (loading.value) return '更新中'
@@ -200,6 +238,10 @@ const alertSmtpLabel = computed(() => {
 })
 
 const alertBreakoutStep = computed(() => publicConfig.value?.alerts?.predicted_breakout_step_cny_g || 2)
+const hasAlertSession = computed(() => Boolean(alertSessionToken.value))
+
+const ALERT_SESSION_TOKEN_KEY = 'gold-alert-session-token'
+const ALERT_SESSION_EMAIL_KEY = 'gold-alert-session-email'
 
 async function loadConfig() {
   publicConfig.value = await getPublicConfig()
@@ -236,6 +278,17 @@ async function loadMonthlyReviews() {
   }
 }
 
+async function loadMarketFactors() {
+  factorsLoading.value = true
+  try {
+    marketFactors.value = await getMarketFactors(selectedSource.value)
+  } catch (error) {
+    marketFactors.value = null
+  } finally {
+    factorsLoading.value = false
+  }
+}
+
 function applyAlertRule(rule) {
   if (!rule) return
   alertRuleId.value = rule.id
@@ -250,16 +303,108 @@ function applyAlertRule(rule) {
   alertForm.notify_on_predicted_low = rule.notify_on_predicted_low !== false
 }
 
+function resetAlertForm() {
+  alertRuleId.value = null
+  alertForm.enabled = true
+  alertForm.source = publicConfig.value?.alerts?.default_source || selectedSource.value
+  alertForm.recipient_email = alertSubscriberEmail.value
+  alertForm.target_high_price = null
+  alertForm.target_low_price = null
+  alertForm.notify_on_custom_high = true
+  alertForm.notify_on_custom_low = true
+  alertForm.notify_on_predicted_high = true
+  alertForm.notify_on_predicted_low = true
+}
+
+function restoreAlertSession() {
+  if (typeof window === 'undefined') return
+  alertSessionToken.value = window.localStorage.getItem(ALERT_SESSION_TOKEN_KEY) || ''
+  alertSubscriberEmail.value = window.localStorage.getItem(ALERT_SESSION_EMAIL_KEY) || ''
+  alertForm.recipient_email = alertSubscriberEmail.value
+}
+
+function persistAlertSession(token, email) {
+  alertSessionToken.value = token
+  alertSubscriberEmail.value = email
+  alertForm.recipient_email = email
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(ALERT_SESSION_TOKEN_KEY, token)
+  window.localStorage.setItem(ALERT_SESSION_EMAIL_KEY, email)
+}
+
+function clearAlertSession() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(ALERT_SESSION_TOKEN_KEY)
+    window.localStorage.removeItem(ALERT_SESSION_EMAIL_KEY)
+  }
+  alertSessionToken.value = ''
+  alertSubscriberEmail.value = ''
+  alertRules.value = []
+  resetAlertForm()
+  alertVerificationCode.value = ''
+  alertStatus.value = '已切换邮箱，请重新验证'
+}
+
+async function requestAlertVerificationCode() {
+  const email = String(alertVerificationEmail.value || '').trim()
+  if (!email) {
+    alertStatus.value = '请先填写收件邮箱'
+    return
+  }
+  alertVerificationSending.value = true
+  alertStatus.value = ''
+  try {
+    await requestAlertCode(email)
+    alertStatus.value = '验证码已发送，请查看邮箱'
+  } catch (error) {
+    alertStatus.value = error.message
+  } finally {
+    alertVerificationSending.value = false
+  }
+}
+
+async function verifyAlertEmail() {
+  const email = String(alertVerificationEmail.value || '').trim()
+  const code = String(alertVerificationCode.value || '').trim()
+  if (!email || !code) {
+    alertStatus.value = '请填写邮箱和验证码'
+    return
+  }
+  alertVerificationSending.value = true
+  alertStatus.value = ''
+  try {
+    const data = await verifyAlertCode(email, code)
+    persistAlertSession(data.session_token, data.subscriber?.email || email)
+    alertVerificationCode.value = ''
+    alertStatus.value = '邮箱已验证'
+    await loadAlertRules()
+  } catch (error) {
+    alertStatus.value = error.message
+  } finally {
+    alertVerificationSending.value = false
+  }
+}
+
 async function loadAlertRules() {
+  if (!hasAlertSession.value) {
+    alertRules.value = []
+    resetAlertForm()
+    return
+  }
   alertLoading.value = true
   try {
-    const data = await getAlertRules()
+    const data = await getAlertRules(alertSessionToken.value)
     alertRules.value = data.rules || []
     if (alertRules.value.length) {
       applyAlertRule(alertRules.value[0])
+    } else {
+      resetAlertForm()
     }
   } catch (error) {
-    alertStatus.value = '提醒规则暂不可用'
+    alertStatus.value = error.message
+    if (String(error.message || '').includes('401')) {
+      clearAlertSession()
+    }
   } finally {
     alertLoading.value = false
   }
@@ -269,7 +414,6 @@ function alertPayload() {
   return {
     enabled: alertForm.enabled,
     source: alertForm.source || selectedSource.value,
-    recipient_email: String(alertForm.recipient_email || '').trim(),
     target_high_price: alertForm.target_high_price === '' ? null : alertForm.target_high_price,
     target_low_price: alertForm.target_low_price === '' ? null : alertForm.target_low_price,
     notify_on_custom_high: alertForm.notify_on_custom_high,
@@ -280,13 +424,17 @@ function alertPayload() {
 }
 
 async function saveAlertRule() {
+  if (!hasAlertSession.value) {
+    alertStatus.value = '请先验证邮箱'
+    return
+  }
   alertSaving.value = true
   alertStatus.value = ''
   try {
     const payload = alertPayload()
     const data = alertRuleId.value
-      ? await updateAlertRule(alertRuleId.value, payload)
-      : await createAlertRule(payload)
+      ? await updateAlertRule(alertRuleId.value, payload, alertSessionToken.value)
+      : await createAlertRule(payload, alertSessionToken.value)
     applyAlertRule(data.rule)
     alertRules.value = [data.rule]
     alertStatus.value = '已保存'
@@ -298,17 +446,20 @@ async function saveAlertRule() {
 }
 
 async function sendAlertTest() {
+  if (!hasAlertSession.value) {
+    alertStatus.value = '请先验证邮箱'
+    return
+  }
   alertSaving.value = true
   alertStatus.value = ''
   try {
     await sendTestEmail({
-      recipient_email: String(alertForm.recipient_email || '').trim(),
       source_label: activeSourceLabel.value,
       current_price: currentPrice.value,
       display_unit: displayUnit.value,
       predicted_range: predictedDailyRange.value,
       event_time: formattedTime.value,
-    })
+    }, alertSessionToken.value)
     alertStatus.value = '测试邮件已发送'
   } catch (error) {
     alertStatus.value = error.message
@@ -318,15 +469,19 @@ async function sendAlertTest() {
 }
 
 async function removeAlertRule() {
+  if (!hasAlertSession.value) {
+    alertStatus.value = '请先验证邮箱'
+    return
+  }
   if (!alertRuleId.value) {
     alertStatus.value = '暂无规则'
     return
   }
   alertSaving.value = true
   try {
-    await deleteAlertRule(alertRuleId.value)
+    await deleteAlertRule(alertRuleId.value, alertSessionToken.value)
     alertRules.value = []
-    alertRuleId.value = null
+    resetAlertForm()
     alertStatus.value = '已删除'
   } catch (error) {
     alertStatus.value = error.message
@@ -394,6 +549,7 @@ async function refreshSnapshot() {
 
 async function refreshMarketData() {
   await refreshSnapshot()
+  await loadMarketFactors()
   await loadKlines()
 }
 
@@ -417,18 +573,21 @@ function scheduleRefresh() {
   // K线历史每 60 秒整体重拉一次(后端有缓存,不会超额度);最新一根靠 syncLastCandle 实时跟价
   klineTimer.value = window.setInterval(() => {
     loadKlines()
+    loadMarketFactors()
     loadMonthlyReviews()
   }, 60 * 1000)
 }
 
 onMounted(async () => {
   try {
+    restoreAlertSession()
     await loadConfig()
     await loadAlertRules()
   } catch (error) {
     errorMessage.value = error.message
   }
   await refreshSnapshot()
+  await loadMarketFactors()
   await loadKlines()
   await loadMonthlyReviews()
   scheduleRefresh()
@@ -629,24 +788,30 @@ onUnmounted(() => {
           <SentimentGauge :value="gaugeValue" :mood="gaugeMood" :sentiment="sentiment"/>
         </article>
 
-        <article class="card news-card">
+        <article class="card news-card factor-card" data-testid="factor-board">
           <div class="card-head">
-            <span class="head-with-icon"><span class="card-icon blue"><Newspaper :size="16"/></span><span class="card-label">新闻摘要</span></span>
+            <span class="head-with-icon"><span class="card-icon blue"><Newspaper :size="16"/></span><span class="card-label">黄金影响因子</span></span>
+            <span class="factor-bias" :class="factorBiasClass">{{ factorBiasLabel }}</span>
           </div>
-          <ul v-if="newsItems.length" class="news-list">
-            <li v-for="item in newsItems" :key="item.id" class="news-item">
-              <span class="news-icon" :class="`tag-${item.sentiment}`">
+          <ul v-if="factorItems.length" class="factor-list" data-testid="factor-list">
+            <li v-for="item in factorItems" :key="item.id" class="factor-item">
+              <span class="factor-icon" :class="signalClass(item.signal, item.status)">
                 <component :is="item.icon" :size="16"/>
               </span>
-              <p class="news-title">{{ item.title }}</p>
-              <span class="news-time">{{ item.time || '刚刚' }}</span>
+              <span class="factor-main">
+                <span class="factor-title">{{ item.label }}</span>
+                <span class="factor-meta">{{ factorMeta(item) }}</span>
+              </span>
+              <span class="factor-reading">
+                <strong>{{ formatFactorChange(item) }}</strong>
+                <span class="factor-tag" :class="signalClass(item.signal, item.status)">{{ signalLabel(item.signal, item.status) }}</span>
+              </span>
             </li>
           </ul>
           <div v-else class="news-empty">
             <Newspaper :size="28"/>
-            <span>暂无最新资讯</span>
+            <span>{{ factorsLoading ? '正在更新因子' : '暂无因子数据' }}</span>
           </div>
-          <button class="link-button" type="button">查看更多 <ChevronRight :size="14"/></button>
         </article>
 
         <article class="card pnl-card">
@@ -696,13 +861,13 @@ onUnmounted(() => {
             <span>{{ alertSmtpLabel }}</span>
           </div>
         </div>
-        <form class="alert-form" @submit.prevent="saveAlertRule">
+        <form v-if="!hasAlertSession" class="alert-verification-form" data-testid="alert-verification-form" @submit.prevent="verifyAlertEmail">
           <label class="alert-field alert-field-email">
-            <span>收件邮箱</span>
+            <span>先验证邮箱</span>
             <span class="alert-input-wrap">
               <Mail :size="15"/>
               <input
-                v-model="alertForm.recipient_email"
+                v-model="alertVerificationEmail"
                 data-testid="alert-email"
                 type="email"
                 autocomplete="email"
@@ -711,6 +876,43 @@ onUnmounted(() => {
               >
             </span>
           </label>
+          <label class="alert-field">
+            <span>验证码</span>
+            <input
+              v-model="alertVerificationCode"
+              data-testid="alert-code"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              placeholder="6位验证码"
+            >
+          </label>
+          <div class="alert-verification-actions">
+            <button
+              type="button"
+              data-testid="alert-request-code"
+              :disabled="alertVerificationSending || !alertVerificationEmail"
+              @click="requestAlertVerificationCode"
+            >
+              <Send :size="15"/>
+              发送验证码
+            </button>
+            <button type="submit" data-testid="alert-verify" :disabled="alertVerificationSending || !alertVerificationCode">
+              <Save :size="15"/>
+              验证
+            </button>
+          </div>
+        </form>
+        <div v-else class="alert-verified-bar">
+          <span class="head-with-icon">
+            <Mail :size="15"/>
+            <span>已验证邮箱</span>
+          </span>
+          <strong data-testid="alert-verified-email">{{ alertSubscriberEmail }}</strong>
+          <button type="button" class="alert-secondary-button" data-testid="alert-change-email" @click="clearAlertSession">
+            更换邮箱
+          </button>
+        </div>
+        <form v-if="hasAlertSession" class="alert-form" @submit.prevent="saveAlertRule">
           <label class="alert-field">
             <span>行情源</span>
             <select v-model="alertForm.source" data-testid="alert-source">
@@ -754,7 +956,7 @@ onUnmounted(() => {
               <Save :size="15"/>
               保存
             </button>
-            <button type="button" data-testid="alert-test-email" :disabled="alertSaving || !alertForm.recipient_email" @click="sendAlertTest">
+            <button type="button" data-testid="alert-test-email" :disabled="alertSaving || alertLoading" @click="sendAlertTest">
               <Send :size="15"/>
               测试邮件
             </button>
