@@ -13,6 +13,16 @@ const INTRADAY_REFERENCE_TIMES = [
   { hour: 18, minute: 0 },
   { hour: 22, minute: 30 },
 ]
+const INTRADAY_SESSION_CUTOFF_HOUR = 6
+const MAX_SAME_SESSION_GAP_MS = 20 * 60 * 60 * 1000
+const ZHESHANG_SOURCE_KEY = 'jdjygold_zheshang'
+const NATURAL_DAY_MINUTES = 24 * 60
+const NATURAL_DAY_TICK_OFFSETS = [0, 6 * 60, 12 * 60, 18 * 60, NATURAL_DAY_MINUTES]
+const SOURCE_TRADING_SESSIONS = {
+  icbc: 'weekday_day',
+  [ZHESHANG_SOURCE_KEY]: 'zheshang_weekly',
+  hongyun_gold_reference: 'weekday_overnight',
+}
 const ZOOM_MIN_WINDOWS = {
   '1min': 30,
   '1day': 7,
@@ -30,6 +40,68 @@ export function monthDiff(start, end) {
 
 function dateKey(d) {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+function sourceSessionType(sourceKey) {
+  return SOURCE_TRADING_SESSIONS[sourceKey] || null
+}
+
+function isZheshangSource(sourceKey) {
+  return sourceKey === ZHESHANG_SOURCE_KEY
+}
+
+function minutesOfDay(d) {
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+function isMondayToFriday(d) {
+  const day = d.getDay()
+  return day >= 1 && day <= 5
+}
+
+function isTuesdayToSaturday(d) {
+  const day = d.getDay()
+  return day >= 2 && day <= 6
+}
+
+function previousDateKey(d) {
+  const previous = new Date(d)
+  previous.setDate(previous.getDate() - 1)
+  return dateKey(previous)
+}
+
+function mondayDateKey(d) {
+  const monday = new Date(d)
+  const day = monday.getDay()
+  const offset = day === 0 ? 6 : day - 1
+  monday.setDate(monday.getDate() - offset)
+  return dateKey(monday)
+}
+
+function startOfDate(d) {
+  const date = new Date(d)
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+function nextDateStart(d) {
+  const date = startOfDate(d)
+  date.setDate(date.getDate() + 1)
+  return date
+}
+
+function withTime(date, hour, minute) {
+  const d = new Date(date)
+  d.setHours(hour, minute, 0, 0)
+  return d
+}
+
+function sessionDateKey(d) {
+  const sessionDate = new Date(d)
+  if (sessionDate.getHours() < INTRADAY_SESSION_CUTOFF_HOUR) {
+    sessionDate.setDate(sessionDate.getDate() - 1)
+  }
+  return dateKey(sessionDate)
 }
 
 function timeLabel(d) {
@@ -51,6 +123,12 @@ function shortDateLabel(d) {
 function clampIndex(index, max) {
   if (!Number.isFinite(index)) return 0
   return Math.max(0, Math.min(Math.round(index), max))
+}
+
+function finiteNumberOrNull(value) {
+  if (value == null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
 }
 
 function floorToTick(date, period) {
@@ -133,6 +211,7 @@ function buildIntradayReferenceTicks(visiblePoints) {
   const usedIndexes = new Set([visiblePoints[0].index])
   const ticks = [{ index: visiblePoints[0].index, time: minuteTick(visiblePoints[0].time) }]
   const baseDate = visiblePoints[0].time
+  const lastPoint = visiblePoints[visiblePoints.length - 1]
 
   INTRADAY_REFERENCE_TIMES.forEach((reference) => {
     const target = intradayTargetTime(baseDate, reference)
@@ -142,11 +221,11 @@ function buildIntradayReferenceTicks(visiblePoints) {
     ticks.push({ index, time: minuteTick(visiblePoints.find((point) => point.index === index)?.time || target) })
   })
 
-  return ticks.sort((a, b) => a.index - b.index)
-}
+  if (!usedIndexes.has(lastPoint.index)) {
+    ticks.push({ index: lastPoint.index, time: minuteTick(lastPoint.time) })
+  }
 
-function minutesBetween(start, end) {
-  return Math.round((end.getTime() - start.getTime()) / 60000)
+  return ticks.sort((a, b) => a.index - b.index)
 }
 
 function mergeMinuteBar(existing, item) {
@@ -164,20 +243,348 @@ function mergeMinuteBar(existing, item) {
   return next
 }
 
-export function buildIntradayTimeline(data) {
-  const points = data
-    .map((item) => ({ item, time: parseTime(item.time) }))
-    .filter(({ item, time }) => time && Number.isFinite(Number(item.close)))
-    .sort((a, b) => a.time - b.time)
+function isIntradayTradingTime(time, sourceKey) {
+  const sessionType = sourceSessionType(sourceKey)
+  if (!sessionType) return true
 
-  if (!points.length) {
-    return { data: [], labelIndexes: new Set(), labels: [] }
+  const minute = minutesOfDay(time)
+
+  if (sessionType === 'weekday_day') {
+    return isMondayToFriday(time) && minute >= 9 * 60 + 10 && minute <= 22 * 60 + 30
   }
 
-  const firstTime = minuteTick(points[0].time)
-  const lastTime = minuteTick(points[points.length - 1].time)
-  const start = firstTime
-  const end = lastTime
+  if (sessionType === 'zheshang_weekly') {
+    const day = time.getDay()
+    if (day === 1) return minute >= 9 * 60
+    if (day >= 2 && day <= 5) return true
+    if (day === 6) return minute <= 2 * 60 + 30
+    return false
+  }
+
+  if (sessionType === 'weekday_overnight') {
+    const daySession = isMondayToFriday(time) && minute >= 9 * 60 + 10
+    const overnightSession = isTuesdayToSaturday(time) && minute <= 2 * 60
+    return daySession || overnightSession
+  }
+
+  return true
+}
+
+function sourceAwareSessionKey(time, sourceKey) {
+  const sessionType = sourceSessionType(sourceKey)
+  if (!sessionType) return null
+
+  const minute = minutesOfDay(time)
+
+  if (sessionType === 'weekday_day') {
+    return `weekday_day:${dateKey(time)}`
+  }
+
+  if (sessionType === 'zheshang_weekly') {
+    return `zheshang_weekly:${mondayDateKey(time)}`
+  }
+
+  if (sessionType === 'weekday_overnight') {
+    const key = minute <= 2 * 60 ? previousDateKey(time) : dateKey(time)
+    return `weekday_overnight:${key}`
+  }
+
+  return null
+}
+
+function sourceSessionBounds(time, sourceKey) {
+  const sessionType = sourceSessionType(sourceKey)
+  if (!sessionType) return null
+
+  const minute = minutesOfDay(time)
+
+  if (sessionType === 'weekday_day') {
+    const base = startOfDate(time)
+    return {
+      key: sourceAwareSessionKey(time, sourceKey),
+      open: withTime(base, 9, 10),
+      close: withTime(base, 22, 30),
+    }
+  }
+
+  if (sessionType === 'zheshang_weekly') {
+    const monday = startOfDate(time)
+    const day = monday.getDay()
+    const offset = day === 0 ? 6 : day - 1
+    monday.setDate(monday.getDate() - offset)
+    const saturday = new Date(monday)
+    saturday.setDate(saturday.getDate() + 5)
+    return {
+      key: sourceAwareSessionKey(time, sourceKey),
+      open: withTime(monday, 9, 0),
+      close: withTime(saturday, 2, 30),
+    }
+  }
+
+  if (sessionType === 'weekday_overnight') {
+    const openDate = startOfDate(time)
+    if (minute <= 2 * 60) {
+      openDate.setDate(openDate.getDate() - 1)
+    }
+    const closeDate = new Date(openDate)
+    closeDate.setDate(closeDate.getDate() + 1)
+    return {
+      key: sourceAwareSessionKey(time, sourceKey),
+      open: withTime(openDate, 9, 10),
+      close: withTime(closeDate, 2, 0),
+    }
+  }
+
+  return null
+}
+
+function shouldSplitIntradaySession(previousTime, currentTime, sourceKey) {
+  if (!previousTime || !currentTime) return false
+  const previousSessionKey = sourceAwareSessionKey(previousTime, sourceKey)
+  const currentSessionKey = sourceAwareSessionKey(currentTime, sourceKey)
+  if (previousSessionKey && currentSessionKey) {
+    return previousSessionKey !== currentSessionKey
+  }
+  if (sessionDateKey(previousTime) !== sessionDateKey(currentTime)) return true
+  return currentTime.getTime() - previousTime.getTime() > MAX_SAME_SESSION_GAP_MS
+}
+
+function buildIntradayBreakRow(previousTime, currentTime) {
+  let breakTime = new Date(previousTime)
+  breakTime.setMinutes(breakTime.getMinutes() + 1, 0, 0)
+  if (breakTime >= currentTime) {
+    breakTime = new Date((previousTime.getTime() + currentTime.getTime()) / 2)
+  }
+  return {
+    time: localIsoMinute(minuteTick(breakTime)),
+    open: null,
+    high: null,
+    low: null,
+    close: null,
+    isBreak: true,
+  }
+}
+
+function resolveOptionDate(raw) {
+  const parsed = raw ? parseTime(raw) : null
+  return parsed || new Date()
+}
+
+function decorateNaturalDayRow(row, sessionKey, dayStart, isBoundaryEnd = false) {
+  return {
+    ...row,
+    displaySessionType: 'natural_day',
+    displaySessionKey: sessionKey,
+    naturalDayStart: localIsoMinute(dayStart),
+    axisLabelOverride: isBoundaryEnd ? '24:00' : undefined,
+  }
+}
+
+function buildZheshangNaturalDayTimeline(barByMinute, options = {}) {
+  const dayByKey = new Map()
+
+  function ensureDay(dayStart) {
+    const key = dateKey(dayStart)
+    if (!dayByKey.has(key)) {
+      dayByKey.set(key, {
+        key,
+        open: startOfDate(dayStart),
+        close: nextDateStart(dayStart),
+        bars: new Map(),
+      })
+    }
+    return dayByKey.get(key)
+  }
+
+  Array.from(barByMinute.values()).forEach((bar) => {
+    const time = parseTime(bar.time)
+    if (!time) return
+    const day = ensureDay(startOfDate(time))
+    day.bars.set(bar.time, bar)
+  })
+
+  const defaultDayStart = startOfDate(resolveOptionDate(options.now))
+  const defaultDayKey = dateKey(defaultDayStart)
+  ensureDay(defaultDayStart)
+
+  const days = Array.from(dayByKey.values()).sort((a, b) => a.open - b.open)
+  const timeline = []
+  const sessions = []
+  let previousClose = null
+  let latestSession = null
+
+  days.forEach((day) => {
+    const sessionKey = `zheshang_day:${day.key}`
+    if (previousClose) {
+      timeline.push(buildIntradayBreakRow(previousClose, day.open))
+    }
+
+    const startIndex = timeline.length
+    for (let cursor = new Date(day.open); cursor <= day.close; cursor.setMinutes(cursor.getMinutes() + 1)) {
+      const time = localIsoMinute(cursor)
+      const isBoundaryEnd = cursor.getTime() === day.close.getTime()
+      const bar = isBoundaryEnd ? null : day.bars.get(time)
+      const emptyRow = {
+        time,
+        open: null,
+        high: null,
+        low: null,
+        close: null,
+      }
+      timeline.push(decorateNaturalDayRow(bar || emptyRow, sessionKey, day.open, isBoundaryEnd))
+    }
+
+    const endIndex = timeline.length - 1
+    const session = {
+      startIndex,
+      endIndex,
+      sessionOpen: localIsoMinute(day.open),
+      sessionClose: localIsoMinute(day.close),
+    }
+    if (day.key === defaultDayKey) latestSession = session
+    sessions.push(session)
+    previousClose = day.close
+  })
+
+  latestSession = latestSession || sessions[sessions.length - 1] || null
+  return { data: timeline, sessions, latestSession }
+}
+
+function buildScheduledIntradayTimeline(barByMinute, sourceKey) {
+  const sessionByKey = new Map()
+  Array.from(barByMinute.values()).forEach((bar) => {
+    const time = parseTime(bar.time)
+    const bounds = time ? sourceSessionBounds(time, sourceKey) : null
+    if (!bounds?.key) return
+    if (!sessionByKey.has(bounds.key)) {
+      sessionByKey.set(bounds.key, { ...bounds, bars: new Map() })
+    }
+    sessionByKey.get(bounds.key).bars.set(bar.time, bar)
+  })
+
+  const scheduledSessions = Array.from(sessionByKey.values()).sort((a, b) => a.open - b.open)
+  if (!scheduledSessions.length) {
+    return { data: [], sessions: [] }
+  }
+
+  const timeline = []
+  const sessions = []
+  let previousClose = null
+
+  scheduledSessions.forEach((session) => {
+    if (previousClose) {
+      timeline.push(buildIntradayBreakRow(previousClose, session.open))
+    }
+
+    const startIndex = timeline.length
+    for (let cursor = new Date(session.open); cursor <= session.close; cursor.setMinutes(cursor.getMinutes() + 1)) {
+      const time = localIsoMinute(cursor)
+      timeline.push(session.bars.get(time) || {
+        time,
+        open: null,
+        high: null,
+        low: null,
+        close: null,
+        sessionKey: session.key,
+      })
+    }
+    const endIndex = timeline.length - 1
+    sessions.push({
+      startIndex,
+      endIndex,
+      sessionOpen: localIsoMinute(session.open),
+      sessionClose: localIsoMinute(session.close),
+    })
+    previousClose = session.close
+  })
+
+  return { data: timeline, sessions }
+}
+
+function addIntradaySession(sessions, data, startIndex, endIndex) {
+  if (startIndex == null || endIndex == null || startIndex > endIndex) return
+  const session = {
+    startIndex,
+    endIndex,
+    sessionOpen: data[startIndex]?.time,
+    sessionClose: data[endIndex]?.time,
+  }
+  if (data[startIndex]?.displaySessionKey) {
+    session.sessionKey = data[startIndex].displaySessionKey
+  }
+  sessions.push(session)
+}
+
+function inferIntradaySessions(data, sourceKey) {
+  const sessions = []
+  let startIndex = null
+  let lastRealIndex = null
+  let previousTime = null
+  let previousRowSessionKey = null
+
+  data.forEach((item, index) => {
+    if (item?.isBreak) {
+      addIntradaySession(sessions, data, startIndex, lastRealIndex)
+      startIndex = null
+      lastRealIndex = null
+      previousTime = null
+      previousRowSessionKey = null
+      return
+    }
+
+    const currentTime = parseTime(item?.time)
+    if (!currentTime) return
+    const currentRowSessionKey = item?.displaySessionKey || sourceAwareSessionKey(currentTime, sourceKey)
+
+    if (sourceSessionType(sourceKey) && !item?.isBreak) {
+      const shouldSplit = previousTime && (
+        previousRowSessionKey && currentRowSessionKey
+          ? previousRowSessionKey !== currentRowSessionKey
+          : shouldSplitIntradaySession(previousTime, currentTime, sourceKey)
+      )
+      if (shouldSplit) {
+        addIntradaySession(sessions, data, startIndex, lastRealIndex)
+        startIndex = null
+        lastRealIndex = null
+      }
+
+      if (startIndex == null) startIndex = index
+      lastRealIndex = index
+      previousTime = currentTime
+      previousRowSessionKey = currentRowSessionKey
+      return
+    }
+
+    if (!Number.isFinite(Number(item?.close))) return
+
+    if (previousTime && shouldSplitIntradaySession(previousTime, currentTime, sourceKey)) {
+      addIntradaySession(sessions, data, startIndex, lastRealIndex)
+      startIndex = null
+      lastRealIndex = null
+    }
+
+    if (startIndex == null) startIndex = index
+    lastRealIndex = index
+    previousTime = currentTime
+  })
+
+  addIntradaySession(sessions, data, startIndex, lastRealIndex)
+  return sessions
+}
+
+function normalizeIntradayOptions(options = {}) {
+  if (typeof options === 'string') return { sourceKey: options }
+  return options || {}
+}
+
+export function buildIntradayTimeline(data, options = {}) {
+  const normalizedOptions = normalizeIntradayOptions(options)
+  const { sourceKey = '' } = normalizedOptions
+  const points = data
+    .map((item) => ({ item, time: parseTime(item.time) }))
+    .filter(({ item, time }) => time && Number.isFinite(Number(item.close)) && isIntradayTradingTime(time, sourceKey))
+    .sort((a, b) => a.time - b.time)
+
   const barByMinute = new Map()
 
   points.forEach(({ item, time }) => {
@@ -185,65 +592,131 @@ export function buildIntradayTimeline(data) {
     barByMinute.set(key, mergeMinuteBar(barByMinute.get(key) || { time: key }, item))
   })
 
-  const timeline = []
-  for (let cursor = new Date(start); cursor <= end; cursor.setMinutes(cursor.getMinutes() + 1)) {
-    const key = localIsoMinute(cursor)
-    timeline.push(barByMinute.get(key) || { time: key })
+  if (isZheshangSource(sourceKey)) {
+    const scheduledTimeline = buildZheshangNaturalDayTimeline(barByMinute, normalizedOptions)
+    const latestSession = scheduledTimeline.latestSession
+    const { labelIndexes, labels } = buildAxisLabelLookup(scheduledTimeline.data, '1min')
+    return {
+      data: scheduledTimeline.data,
+      labelIndexes,
+      labels,
+      sessions: scheduledTimeline.sessions,
+      latestSession,
+      sessionOpen: latestSession?.sessionOpen,
+      sessionClose: latestSession?.sessionClose,
+    }
   }
 
-  const labelIndexes = new Set()
-  const labels = new Array(timeline.length).fill('')
-  const referenceDates = [
-    start,
-    ...INTRADAY_REFERENCE_TIMES.map((reference) => intradayTargetTime(start, reference)),
-    end,
-  ]
-  let lastDayKey = null
+  if (!points.length) {
+    return { data: [], labelIndexes: new Set(), labels: [] }
+  }
 
-  referenceDates.forEach((reference) => {
-    if (reference < start || reference > end) return
-    const index = minutesBetween(start, reference)
-    const key = dateKey(reference)
-    labels[index] = key !== lastDayKey ? `${chineseDateLabel(reference)}\n${timeLabel(reference)}` : timeLabel(reference)
-    labelIndexes.add(index)
-    lastDayKey = key
-  })
+  if (sourceSessionType(sourceKey)) {
+    const scheduledTimeline = buildScheduledIntradayTimeline(barByMinute, sourceKey)
+    const latestSession = scheduledTimeline.sessions[scheduledTimeline.sessions.length - 1] || null
+    const { labelIndexes, labels } = buildAxisLabelLookup(scheduledTimeline.data, '1min')
+    return {
+      data: scheduledTimeline.data,
+      labelIndexes,
+      labels,
+      sessions: scheduledTimeline.sessions,
+      latestSession,
+      sessionOpen: latestSession?.sessionOpen,
+      sessionClose: latestSession?.sessionClose,
+    }
+  }
+
+  const timeline = []
+  const sessions = []
+  let sessionStartIndex = null
+  let previousTime = null
+  let previousRealIndex = null
+
+  Array.from(barByMinute.values())
+    .sort((a, b) => parseTime(a.time) - parseTime(b.time))
+    .forEach((bar) => {
+      const currentTime = parseTime(bar.time)
+      if (previousTime && shouldSplitIntradaySession(previousTime, currentTime, sourceKey)) {
+        addIntradaySession(sessions, timeline, sessionStartIndex, previousRealIndex)
+        timeline.push(buildIntradayBreakRow(previousTime, currentTime))
+        sessionStartIndex = null
+        previousRealIndex = null
+      }
+
+      if (sessionStartIndex == null) sessionStartIndex = timeline.length
+      timeline.push(bar)
+      previousTime = currentTime
+      previousRealIndex = timeline.length - 1
+    })
+
+  addIntradaySession(sessions, timeline, sessionStartIndex, previousRealIndex)
+
+  const latestSession = sessions[sessions.length - 1] || null
+  const { labelIndexes, labels } = buildAxisLabelLookup(timeline, '1min')
 
   return {
     data: timeline,
     labelIndexes,
     labels,
-    sessionOpen: localIsoMinute(start),
-    sessionClose: localIsoMinute(end),
+    sessions,
+    latestSession,
+    sessionOpen: latestSession?.sessionOpen,
+    sessionClose: latestSession?.sessionClose,
   }
 }
 
 export function buildIntradayViewportRange(data, options = {}) {
+  const { sourceKey = '' } = normalizeIntradayOptions(options)
   const n = data.length
   if (!n) return { start: 0, end: 0, focused: false }
 
   const finiteIndexes = []
   data.forEach((item, index) => {
-    if (Number.isFinite(Number(item.close))) finiteIndexes.push(index)
+    if (finiteNumberOrNull(item.close) != null) finiteIndexes.push(index)
   })
   if (!finiteIndexes.length) return { start: 0, end: n - 1, focused: false }
 
-  const first = finiteIndexes[0]
-  const last = finiteIndexes[finiteIndexes.length - 1]
-  const span = last - first + 1
-  const fullDayThreshold = Number(options.fullDayThreshold ?? 240)
-  if (span >= fullDayThreshold) return { start: 0, end: n - 1, focused: false }
+  const sessions = inferIntradaySessions(data, sourceKey)
+  const defaultDayKey = isZheshangSource(sourceKey)
+    ? `zheshang_day:${dateKey(startOfDate(resolveOptionDate(normalizeIntradayOptions(options).now)))}`
+    : null
+  const latestSession = defaultDayKey
+    ? sessions.find((session) => session.sessionKey === defaultDayKey) || sessions[sessions.length - 1]
+    : sessions[sessions.length - 1]
+  if (!latestSession) return { start: finiteIndexes[0], end: finiteIndexes[finiteIndexes.length - 1], focused: false }
 
-  const minWindow = Math.min(n, Number(options.minWindow ?? 180))
-  const padding = Number(options.padding ?? 30)
-  const desiredWindow = Math.min(n, Math.max(minWindow, span + padding * 2))
-  if (desiredWindow >= n) return { start: 0, end: n - 1, focused: false }
-  const center = (first + last) / 2
-  let start = Math.round(center - (desiredWindow - 1) / 2)
-  start = Math.max(0, Math.min(start, n - desiredWindow))
-  const end = start + desiredWindow - 1
+  const start = latestSession.startIndex
+  const end = latestSession.endIndex
+  return { start, end, focused: start > 0 || end < n - 1 }
+}
 
-  return { start, end, focused: true }
+export function buildIntradayLineSegments(data) {
+  const segments = []
+  let current = new Array(data.length).fill(null)
+  let hasPoint = false
+
+  function pushCurrent() {
+    if (!hasPoint) return
+    segments.push(current)
+    current = new Array(data.length).fill(null)
+    hasPoint = false
+  }
+
+  data.forEach((item, index) => {
+    if (item?.isBreak) {
+      pushCurrent()
+      return
+    }
+
+    const close = finiteNumberOrNull(item?.close)
+    if (close == null) return
+
+    current[index] = close
+    hasPoint = true
+  })
+
+  pushCurrent()
+  return segments
 }
 
 function fallbackVisibleTicks(data, period, startIndex, endIndex) {
@@ -262,10 +735,14 @@ function buildAxisTicks(data, period, range = {}) {
 
   for (let index = startIndex; index <= endIndex; index += 1) {
     const time = parseTime(data[index]?.time)
+    if (period === '1min' && data[index]?.isBreak) continue
     if (time) visiblePoints.push({ index, time })
   }
 
   if (!visiblePoints.length) return fallbackVisibleTicks(data, period, startIndex, endIndex)
+  if (period === '1min' && isNaturalDayRange(data, startIndex, endIndex)) {
+    return buildNaturalDayTicks(data, startIndex, endIndex)
+  }
   if (period === '1min') return buildIntradayReferenceTicks(visiblePoints)
   if (visiblePoints.length <= AXIS_TICK_COUNT) {
     return visiblePoints.map((point) => ({ index: point.index, time: floorToTick(point.time, period) }))
@@ -287,12 +764,46 @@ function buildAxisTicks(data, period, range = {}) {
   return ticks.length ? ticks.sort((a, b) => a.index - b.index) : fallbackVisibleTicks(data, period, startIndex, endIndex)
 }
 
+function isNaturalDayRange(data, startIndex, endIndex) {
+  const first = data[startIndex]
+  const last = data[endIndex]
+  return first?.displaySessionType === 'natural_day'
+    && last?.displaySessionType === 'natural_day'
+    && first.displaySessionKey
+    && first.displaySessionKey === last.displaySessionKey
+    && endIndex - startIndex >= NATURAL_DAY_MINUTES
+}
+
+function buildNaturalDayTicks(data, startIndex, endIndex) {
+  const ticks = []
+  NATURAL_DAY_TICK_OFFSETS.forEach((offset) => {
+    const index = startIndex + offset
+    if (index > endIndex || !data[index]) return
+    const time = parseTime(data[index].time)
+    if (!time) return
+    ticks.push({
+      index,
+      time,
+      labelOverride: offset === 0
+        ? `${chineseDateLabel(time)}\n00:00`
+        : offset === NATURAL_DAY_MINUTES
+          ? '24:00'
+          : timeLabel(time),
+    })
+  })
+  return ticks
+}
+
 function formatTickSequenceLabels(ticks, period) {
   const labels = []
   let lastDayKey = null
   let lastYear = null
 
-  ticks.forEach(({ time }) => {
+  ticks.forEach(({ time, labelOverride }) => {
+    if (labelOverride) {
+      labels.push(labelOverride)
+      return
+    }
     if (period === '1month') {
       const year = time.getFullYear()
       labels.push(lastYear === null || year !== lastYear ? `${year}\n${time.getMonth() + 1}月` : `${time.getMonth() + 1}月`)
@@ -333,11 +844,16 @@ export function buildViewportResetKey({ period, sourceKey } = {}) {
   return `${period || ''}::${sourceKey || ''}`
 }
 
-export function buildZoomMinValueSpan(period, dataLength) {
+export function buildZoomMinValueSpan(period, dataLength, options = {}) {
   const n = Number(dataLength)
   if (!Number.isFinite(n) || n <= 1) return 0
   const windowSize = Math.min(n, ZOOM_MIN_WINDOWS[period] || 7)
-  return Math.max(0, windowSize - 1)
+  const defaultSpan = Math.max(0, windowSize - 1)
+  const visibleSpan = Number(options.visibleSpan)
+  if (period === '1min' && Number.isFinite(visibleSpan)) {
+    return Math.max(0, Math.min(defaultSpan, Math.floor(visibleSpan)))
+  }
+  return defaultSpan
 }
 
 // 根据当前可见窗口生成固定刻度:
@@ -422,13 +938,13 @@ export function buildVisibleExtrema(data, startIdx, endIdx) {
 
   for (let index = start; index <= end; index += 1) {
     const row = data[index]
-    const highValue = Number(row?.high ?? row?.close)
-    const lowValue = Number(row?.low ?? row?.close)
+    const highValue = finiteNumberOrNull(row?.high ?? row?.close)
+    const lowValue = finiteNumberOrNull(row?.low ?? row?.close)
 
-    if (Number.isFinite(highValue) && (high == null || highValue > high.value)) {
+    if (highValue != null && (high == null || highValue > high.value)) {
       high = { index, value: highValue }
     }
-    if (Number.isFinite(lowValue) && (low == null || lowValue < low.value)) {
+    if (lowValue != null && (low == null || lowValue < low.value)) {
       low = { index, value: lowValue }
     }
   }
@@ -460,8 +976,8 @@ function roundTo(value, decimals) {
 export function buildYAxisScale(values, stopLoss = null, tickCount = Y_AXIS_TICK_COUNT) {
   const allValues = values
     .concat(stopLoss == null ? [] : [stopLoss])
-    .map(Number)
-    .filter(Number.isFinite)
+    .map(finiteNumberOrNull)
+    .filter((value) => value != null)
 
   if (!allValues.length) {
     return { splitNumber: tickCount - 1 }

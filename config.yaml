@@ -100,6 +100,11 @@ data_sources:
       day_range_method: "post"
       day_range_response_format: "jdjygold_today_prices"
       day_range_mode: "reported"
+      history_endpoint: "https://api.jdjygold.com/gw/generic/hj/h5/m/historyPrices"
+      history_method: "post"
+      history_params:
+        period: "w"
+      history_response_format: "jdjygold_history_prices"
       kline_mode: "intraday"
       currency: "CNY"
       unit: "g"

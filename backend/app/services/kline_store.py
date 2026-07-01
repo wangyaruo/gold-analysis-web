@@ -83,6 +83,60 @@ class KlineStore:
                 continue
         self.prune(datetime.now())
 
+    def insert_missing_candles(self, source: str, period: str, candles: Iterable[dict[str, Any]]) -> None:
+        for candle in candles:
+            try:
+                self.insert_missing_bar(
+                    source,
+                    period,
+                    str(candle["time"]),
+                    float(candle["open"]),
+                    float(candle["high"]),
+                    float(candle["low"]),
+                    float(candle["close"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        self.prune(datetime.now())
+
+    def insert_missing_bar(
+        self,
+        source: str,
+        period: str,
+        time_value: str,
+        open_value: float,
+        high_value: float,
+        low_value: float,
+        close_value: float,
+    ) -> None:
+        bar_time = _format_dt(_parse_dt(time_value))
+        open_number = float(open_value)
+        close_number = float(close_value)
+        change = close_number - open_number
+        change_percent = change / open_number if open_number else 0.0
+        now_text = _format_dt(datetime.now())
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO kline_bars (
+                source, period, time, open, high, low, close, change, change_percent, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source,
+                period,
+                bar_time,
+                open_number,
+                float(high_value),
+                float(low_value),
+                close_number,
+                change,
+                change_percent,
+                now_text,
+            ),
+        )
+        self._conn.commit()
+
     def upsert_bar(
         self,
         source: str,

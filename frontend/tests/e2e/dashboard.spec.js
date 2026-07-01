@@ -237,10 +237,14 @@ const monthlyReviewsPayload = {
 }
 
 let monthlyReviewsRequestCount = 0
+let snapshotRequestCount = 0
+let klineRequestCount = 0
 let latestKlineSource = ''
 
 test.beforeEach(async ({ page }) => {
   monthlyReviewsRequestCount = 0
+  snapshotRequestCount = 0
+  klineRequestCount = 0
   latestKlineSource = ''
 
   await page.route('**/api/config/public', async (route) => {
@@ -262,6 +266,7 @@ test.beforeEach(async ({ page }) => {
   })
 
   await page.route('**/api/market/klines**', async (route) => {
+    klineRequestCount += 1
     latestKlineSource = new URL(route.request().url()).searchParams.get('source') || ''
     await route.fulfill({
       json: {
@@ -280,6 +285,7 @@ test.beforeEach(async ({ page }) => {
   })
 
   await page.route('**/api/market/snapshot**', async (route) => {
+    snapshotRequestCount += 1
     const source = new URL(route.request().url()).searchParams.get('source') || 'icbc'
     await route.fulfill({
       json: {
@@ -359,6 +365,27 @@ test('switches the kline data source without changing 30 day commodity reviews',
   await expect(page.getByTestId('monthly-reviews-panel')).toContainText('黄金30日行情')
   await expect(page.getByTestId('monthly-reviews-panel')).toContainText('白银30日行情')
   await expect(page.getByTestId('monthly-reviews-panel')).toContainText('铂金30日行情')
+})
+
+test('resets only the kline chart when reset control is clicked', async ({ page }) => {
+  await page.goto('/')
+
+  await expect(page.getByTestId('kline-reset-button')).toBeVisible()
+  const actionOrder = await page.locator('.chart-actions').evaluate((node) =>
+    Array.from(node.children).map((child) => child.getAttribute('data-testid') || child.className)
+  )
+  expect(actionOrder[0]).toBe('kline-reset-button')
+  expect(actionOrder[1]).toBe('period-tabs')
+
+  const beforeKlines = klineRequestCount
+  const beforeSnapshots = snapshotRequestCount
+  const beforeReviews = monthlyReviewsRequestCount
+
+  await page.getByTestId('kline-reset-button').click()
+
+  await expect.poll(() => klineRequestCount).toBe(beforeKlines + 1)
+  expect(snapshotRequestCount).toBe(beforeSnapshots)
+  expect(monthlyReviewsRequestCount).toBe(beforeReviews)
 })
 
 test('shows gold silver and platinum 30 day reviews in one panel', async ({ page }) => {

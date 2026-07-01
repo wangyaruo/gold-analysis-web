@@ -11,6 +11,7 @@ import {
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   buildAxisLabelLookup,
+  buildIntradayLineSegments,
   buildIntradayTimeline,
   buildIntradayViewportRange,
   buildViewportResetKey,
@@ -40,6 +41,7 @@ const props = defineProps({
   unit: { type: String, default: 'CNY/g' },
   period: { type: String, default: '1day' },
   sourceKey: { type: String, default: '' },
+  resetKey: { type: Number, default: 0 },
 })
 
 // 默认可见窗口(=约10个刻度宽). 月线放宽到 12 条, 避免粗略 30 天数据造成自然月标签重复。
@@ -54,6 +56,7 @@ let zoomEnd = null
 
 const useCandle = computed(() => props.period === '1day' || props.period === '1month')
 const useIntradayProfile = computed(() => props.period === '1min')
+const isFinitePrice = (value) => value != null && value !== '' && Number.isFinite(Number(value))
 
 const bars = computed(() => {
   if (props.candles.length) {
@@ -80,7 +83,7 @@ function defaultRange(data) {
   const n = data.length
   const win = DEFAULT_WINDOW[props.period] || 10
   const end = n - 1
-  if (props.period === '1min') return buildIntradayViewportRange(data)
+  if (props.period === '1min') return buildIntradayViewportRange(data, { sourceKey: props.sourceKey })
   const start = Math.max(0, end - win + 1)
   return { start, end }
 }
@@ -94,12 +97,12 @@ function buildXAxisLabels(data, startIndex, endIndex) {
 }
 
 const buildOption = () => {
-  const timeline = useIntradayProfile.value ? buildIntradayTimeline(bars.value) : null
+  const timeline = useIntradayProfile.value ? buildIntradayTimeline(bars.value, { sourceKey: props.sourceKey }) : null
   const data = timeline?.data || bars.value
   const n = data.length
   const categories = data.map((c) => formatFullTime(c.time, props.period))
   const ohlc = data.map((c) => [c.open, c.close, c.low, c.high])
-  const closeLine = data.map((c) => (Number.isFinite(Number(c.close)) ? Number(c.close) : null))
+  const closeLine = data.map((c) => (isFinitePrice(c.close) ? Number(c.close) : null))
   const decimals = useCandle.value ? 2 : 3
 
   // 可见窗口: 优先用用户拖动后的, 否则默认贴最新
@@ -123,7 +126,7 @@ const buildOption = () => {
   const startPct = n > 1 ? (vs / (n - 1)) * 100 : 0
   const endPct = n > 1 ? (ve / (n - 1)) * 100 : 100
   const { showTimeTick, formatTick } = buildXAxisLabels(data, vs, ve)
-  const latestIndex = data.map((item) => item.close).findLastIndex((value) => Number.isFinite(Number(value)))
+  const latestIndex = data.map((item) => item.close).findLastIndex((value) => isFinitePrice(value))
   const latestPoint = latestIndex >= 0
     ? { category: categories[latestIndex], value: Number(data[latestIndex].close) }
     : null
@@ -281,34 +284,38 @@ const buildOption = () => {
     tooltip: { show: false },
   }
 
-  const lineSeries = {
-    name: '收盘',
-    type: 'line',
-    data: closeLine,
-    smooth: useIntradayProfile.value ? 0.18 : true,
-    showSymbol: false,
-    connectNulls: true,
-    z: 4,
-    lineStyle: {
-      color: useIntradayProfile.value ? '#c58a12' : '#d4a72c',
-      width: useIntradayProfile.value ? 2.2 : 2,
-      cap: 'round',
-      join: 'round',
-    },
-    areaStyle: {
-      color: {
-        type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-        colorStops: [
-          { offset: 0, color: useIntradayProfile.value ? 'rgba(232, 169, 44, 0.52)' : 'rgba(212,167,44,0.28)' },
-          { offset: 0.62, color: useIntradayProfile.value ? 'rgba(242, 193, 82, 0.20)' : 'rgba(212,167,44,0.09)' },
-          { offset: 1, color: 'rgba(212,167,44,0.02)' },
-        ],
+  function closeLineSeries(seriesData, segmentIndex = 0) {
+    return {
+      name: '收盘',
+      type: 'line',
+      data: seriesData,
+      smooth: useIntradayProfile.value ? 0.18 : true,
+      showSymbol: false,
+      connectNulls: true,
+      z: 4,
+      lineStyle: {
+        color: useIntradayProfile.value ? '#c58a12' : '#d4a72c',
+        width: useIntradayProfile.value ? 2.2 : 2,
+        cap: 'round',
+        join: 'round',
       },
-    },
-    markLine: visibleMarkLine,
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: useIntradayProfile.value ? 'rgba(232, 169, 44, 0.52)' : 'rgba(212,167,44,0.28)' },
+            { offset: 0.62, color: useIntradayProfile.value ? 'rgba(242, 193, 82, 0.20)' : 'rgba(212,167,44,0.09)' },
+            { offset: 1, color: 'rgba(212,167,44,0.02)' },
+          ],
+        },
+      },
+      markLine: segmentIndex === 0 ? visibleMarkLine : undefined,
+    }
   }
 
-  const minValueSpan = buildZoomMinValueSpan(props.period, n)
+  const minValueSpan = buildZoomMinValueSpan(props.period, n, {
+    visibleSpan: useIntradayProfile.value ? ve - vs : undefined,
+  })
   const dataZoom = [
     {
       type: 'inside',
@@ -343,7 +350,11 @@ const buildOption = () => {
     },
   ]
   const extremaSeriesList = [highSeries, lowSeries, invisibleTooltipSeries]
-  const intradaySeries = [lineSeries, ...extremaSeriesList, latestHaloSeries, latestDotSeries]
+  const intradayLineSeries = buildIntradayLineSegments(data).map((segmentData, segmentIndex) => (
+    closeLineSeries(segmentData, segmentIndex)
+  ))
+  const intradaySeries = [...intradayLineSeries, ...extremaSeriesList, latestHaloSeries, latestDotSeries]
+  const regularLineSeries = closeLineSeries(closeLine)
 
   return {
     animation: false,
@@ -411,7 +422,7 @@ const buildOption = () => {
       },
     },
     dataZoom,
-    series: useCandle.value ? [candleSeries, ...extremaSeriesList] : useIntradayProfile.value ? intradaySeries : [lineSeries, ...extremaSeriesList],
+    series: useCandle.value ? [candleSeries, ...extremaSeriesList] : useIntradayProfile.value ? intradaySeries : [regularLineSeries, ...extremaSeriesList],
   }
 }
 
@@ -426,7 +437,7 @@ const onDataZoom = () => {
   const opt = chartInstance.getOption()
   const dz = (opt.dataZoom || [])[0]
   if (!dz) return
-  const data = useIntradayProfile.value ? buildIntradayTimeline(bars.value).data : bars.value
+  const data = useIntradayProfile.value ? buildIntradayTimeline(bars.value, { sourceKey: props.sourceKey }).data : bars.value
   const n = data.length
   if (n < 1) return
   const sPct = Number(dz.start ?? 0)
@@ -480,6 +491,12 @@ onUnmounted(() => {
 
 // 切换周期或数据源: 重置缩放回默认; 普通数据刷新继续保留当前缩放。
 watch(() => buildViewportResetKey({ period: props.period, sourceKey: props.sourceKey }), () => {
+  zoomStart = null
+  zoomEnd = null
+  nextTick(render)
+})
+
+watch(() => props.resetKey, () => {
   zoomStart = null
   zoomEnd = null
   nextTick(render)

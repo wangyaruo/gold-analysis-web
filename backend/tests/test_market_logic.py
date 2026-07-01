@@ -87,6 +87,15 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("hongyun_gold_reference", public_options)
         self.assertFalse(public_options["hongyun_gold_reference"]["requires_api_key"])
 
+    def test_zheshang_source_configures_week_history_backfill(self):
+        config = load_config()
+
+        source_config = config["data_sources"]["price"]["jdjygold_zheshang"]
+
+        self.assertEqual(source_config["history_endpoint"], "https://api.jdjygold.com/gw/generic/hj/h5/m/historyPrices")
+        self.assertEqual(source_config["history_response_format"], "jdjygold_history_prices")
+        self.assertEqual(source_config["history_params"], {"period": "w"})
+
     def test_three_commodity_monthly_reviews_are_configured(self):
         config = load_config()
         commodities = config["market_review"]["commodities"]
@@ -211,6 +220,29 @@ class PriceProviderTests(unittest.TestCase):
             "close": 880.0,
         })
         self.assertEqual(payload["latest"]["candles"][-1]["time"], "2026-06-30T17:00:00")
+
+    def test_parse_jdjygold_history_prices_payload_extracts_week_points(self):
+        payload = _parse_response_payload(
+            '{"resultData":{"datas":[{"demode":false,"price":"890.5200","time":"1782230400000"},{"demode":false,"price":"867.1100","time":"1782835200000"}],"status":"SUCCESS"},"success":true,"resultCode":0,"resultMsg":"成功"}',
+            "jdjygold_history_prices",
+        )
+
+        self.assertEqual(payload["latest"]["candles"], [
+            {
+                "time": "2026-06-24T00:00:00",
+                "open": 890.52,
+                "high": 890.52,
+                "low": 890.52,
+                "close": 890.52,
+            },
+            {
+                "time": "2026-07-01T00:00:00",
+                "open": 867.11,
+                "high": 867.11,
+                "low": 867.11,
+                "close": 867.11,
+            },
+        ])
 
     def test_legacy_tls_source_uses_ssl_context_for_httpx(self):
         verify_option = _httpx_verify_option({"legacy_tls": True})
@@ -502,6 +534,84 @@ class PriceProviderTests(unittest.TestCase):
             "2026-06-30T17:00:00",
         ])
         self.assertEqual(payload["candles"][-1]["close"], 880.83)
+
+    def test_source_intraday_klines_backfill_zheshang_week_history(self):
+        class Response:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class FakeAsyncClient:
+            requests = []
+
+            def __init__(self, *args, **kwargs) -> None:
+                return None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args) -> None:
+                return None
+
+            async def request(self, method, endpoint, **kwargs):
+                self.requests.append((method, endpoint, kwargs))
+                if endpoint.endswith("/historyPrices"):
+                    return Response(
+                        '{"resultData":{"datas":[{"price":"890.52","time":"1782230400000"},{"price":"867.11","time":"1782835200000"}],"status":"SUCCESS"},"success":true}'
+                    )
+                return Response(
+                    '{"resultData":{"datas":[{"value":["2026-07-01 00:00:00","879.77"]},{"value":["2026-07-01 09:00:00","870.39"]},{"value":["2026-07-01 10:55:00","869.70"]}],"status":"SUCCESS"},"success":true}'
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = KlineStore(Path(tmp) / "klines.sqlite")
+            store.upsert_bar("jdjygold_zheshang", "1min", "2026-06-24T00:00:00", 891.0, 891.0, 891.0, 891.0)
+            provider = PriceProvider(
+                {
+                    "data_sources": {
+                        "active": "jdjygold_zheshang",
+                        "price": {
+                            "jdjygold_zheshang": {
+                                "type": "http",
+                                "name": "浙商银行积存金",
+                                "currency": "CNY",
+                                "unit": "g",
+                                "kline_mode": "intraday",
+                                "day_range_endpoint": "https://example.test/today",
+                                "day_range_method": "post",
+                                "day_range_response_format": "jdjygold_today_prices",
+                                "history_endpoint": "https://example.test/historyPrices",
+                                "history_method": "post",
+                                "history_params": {"period": "w"},
+                                "history_response_format": "jdjygold_history_prices",
+                            },
+                        },
+                    },
+                    "retry": {"max_attempts": 1},
+                }
+            )
+            klines_service._cache.clear()
+            FakeAsyncClient.requests = []
+
+            with patch("backend.app.services.klines.httpx.AsyncClient", FakeAsyncClient):
+                payload = asyncio.run(get_klines("1min", source="jdjygold_zheshang", provider=provider, store=store))
+
+        self.assertEqual([endpoint for _, endpoint, _ in FakeAsyncClient.requests], [
+            "https://example.test/historyPrices",
+            "https://example.test/today",
+        ])
+        self.assertEqual(payload["source"], "jdjygold_zheshang")
+        self.assertEqual(payload["count"], 4)
+        self.assertEqual([candle["time"] for candle in payload["candles"]], [
+            "2026-06-24T00:00:00",
+            "2026-07-01T00:00:00",
+            "2026-07-01T09:00:00",
+            "2026-07-01T10:55:00",
+        ])
+        self.assertEqual(payload["candles"][0]["close"], 891.0)
+        self.assertEqual(payload["candles"][1]["close"], 879.77)
 
     def test_source_daily_klines_use_local_db_for_intraday_source(self):
         with tempfile.TemporaryDirectory() as tmp:

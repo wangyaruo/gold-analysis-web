@@ -283,6 +283,8 @@ def _parse_response_payload(text: str, response_format: str) -> dict[str, Any]:
         return _parse_jdjygold_latest_payload(text)
     if response_format == "jdjygold_today_prices":
         return _parse_jdjygold_today_prices_payload(text)
+    if response_format == "jdjygold_history_prices":
+        return _parse_jdjygold_history_prices_payload(text)
     if response_format == "jsvar":
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
@@ -390,6 +392,43 @@ def _parse_jdjygold_today_prices_payload(text: str) -> dict[str, Any]:
         "high_price": max(prices),
         "candles": candles,
     }
+    return payload
+
+
+def _parse_jdjygold_history_prices_payload(text: str) -> dict[str, Any]:
+    payload = json.loads(text)
+    result_data = payload.get("resultData") or {}
+    if not payload.get("success") or result_data.get("status") != "SUCCESS":
+        raise MarketDataError("invalid JDJYGold history prices response: request was not successful")
+
+    candles: list[dict[str, float | str]] = []
+    for item in result_data.get("datas") or []:
+        parsed = _optional_float(item.get("price"))
+        raw_time = item.get("time")
+        if parsed is None or raw_time in (None, ""):
+            continue
+        try:
+            timestamp = int(str(raw_time))
+        except ValueError:
+            continue
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp // 1000
+        local_time = datetime.fromtimestamp(timestamp, SHANGHAI_TZ).replace(tzinfo=None)
+        candles.append(
+            {
+                "time": local_time.replace(microsecond=0).isoformat(),
+                "open": parsed,
+                "high": parsed,
+                "low": parsed,
+                "close": parsed,
+            }
+        )
+
+    if not candles:
+        raise MarketDataError("invalid JDJYGold history prices response: no price points")
+
+    candles.sort(key=lambda item: str(item["time"]))
+    payload["latest"] = {"candles": candles}
     return payload
 
 

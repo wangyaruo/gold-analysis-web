@@ -186,6 +186,33 @@ async def _get_source_history_klines(
     }
 
 
+async def _fetch_configured_source_candles(
+    client: httpx.AsyncClient,
+    source_config: dict[str, Any],
+    prefix: str,
+) -> list[dict[str, Any]]:
+    endpoint = source_config.get(f"{prefix}_endpoint")
+    if not endpoint:
+        return []
+
+    method = str(source_config.get(f"{prefix}_method", "get")).upper()
+    params = dict(source_config.get(f"{prefix}_params", {}))
+    headers = dict(source_config.get("headers", {}))
+    request_kwargs: dict[str, Any] = {"headers": headers}
+    if method == "POST":
+        request_kwargs["data"] = params
+    else:
+        request_kwargs["params"] = params
+
+    response = await client.request(method, endpoint, **request_kwargs)
+    response.raise_for_status()
+    payload = _parse_response_payload(
+        response.text,
+        source_config.get(f"{prefix}_response_format", "json"),
+    )
+    return list(payload.get("latest", {}).get("candles") or [])
+
+
 async def _get_source_intraday_klines(
     period: str,
     source: str,
@@ -201,30 +228,22 @@ async def _get_source_intraday_klines(
     if cached and cached[0] > now:
         return cached[1]
 
-    endpoint = source_config["day_range_endpoint"]
-    method = str(source_config.get("day_range_method", "get")).upper()
-    params = dict(source_config.get("day_range_params", {}))
-    headers = dict(source_config.get("headers", {}))
-    request_kwargs: dict[str, Any] = {"headers": headers}
-    if method == "POST":
-        request_kwargs["data"] = params
-    else:
-        request_kwargs["params"] = params
-
     timeout_seconds = float(source_config.get("timeout_seconds", 5))
     async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await client.request(method, endpoint, **request_kwargs)
-        response.raise_for_status()
-        payload = _parse_response_payload(
-            response.text,
-            source_config.get("day_range_response_format", "json"),
-        )
+        history_candles = []
+        if source_config.get("history_endpoint"):
+            try:
+                history_candles = await _fetch_configured_source_candles(client, source_config, "history")
+            except Exception:  # noqa: BLE001
+                history_candles = []
+        day_candles = await _fetch_configured_source_candles(client, source_config, "day_range")
 
-    candles = list(payload.get("latest", {}).get("candles") or [])
+    candles = [*history_candles, *day_candles]
     if not candles:
         raise RuntimeError("source intraday response has no candles")
     if store is not None:
-        store.upsert_candles(source, "1min", candles)
+        store.insert_missing_candles(source, "1min", history_candles)
+        store.upsert_candles(source, "1min", day_candles)
         candles = store.get_candles(source, "1min")
 
     display_unit = f"{source_config.get('currency', 'CNY')}/{source_config.get('unit', 'g')}"

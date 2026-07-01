@@ -40,6 +40,7 @@ const klinesLoading = ref(false)
 const monthlyReviews = ref([])
 const monthlyReviewLoading = ref(false)
 const selectedPeriod = ref('1min')
+const klineResetKey = ref(0)
 const periodOptions = [
   {key: '1min', label: '分线'},
   {key: '1day', label: '日线'},
@@ -184,6 +185,11 @@ async function loadMonthlyReviews() {
 async function selectPeriod(key) {
   if (selectedPeriod.value === key) return
   selectedPeriod.value = key
+  await loadKlines()
+}
+
+async function resetKlineChart() {
+  klineResetKey.value += 1
   await loadKlines()
 }
 
@@ -362,6 +368,17 @@ onUnmounted(() => {
               <h2 class="card-title">K线 · {{ periodOptions.find(p => p.key === selectedPeriod)?.label }}</h2>
             </div>
             <div class="chart-actions">
+              <button
+                type="button"
+                class="chart-reset-button"
+                data-testid="kline-reset-button"
+                aria-label="复位K线图缩放"
+                title="复位K线图缩放"
+                :disabled="klinesLoading"
+                @click="resetKlineChart"
+              >
+                <RefreshCw :size="14" :class="{ spin: klinesLoading }"/>
+              </button>
               <div class="period-tabs">
                 <button
                   v-for="p in periodOptions"
@@ -389,6 +406,7 @@ onUnmounted(() => {
             :unit="klineUnit"
             :period="selectedPeriod"
             :source-key="selectedSource"
+            :reset-key="klineResetKey"
           />
         </article>
 

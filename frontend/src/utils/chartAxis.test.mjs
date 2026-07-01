@@ -5,6 +5,7 @@ import {
   buildAxisLabelLookup,
   buildAxisLabelIndexes,
   buildAxisLabelTexts,
+  buildIntradayLineSegments,
   buildIntradayTimeline,
   buildIntradayViewportRange,
   buildViewportResetKey,
@@ -101,12 +102,17 @@ const partialIntradayTimeline = buildIntradayTimeline([
 ])
 assert.equal(partialIntradayTimeline.data[0].time, '2026-06-29T16:45:00.000')
 assert.equal(partialIntradayTimeline.data[partialIntradayTimeline.data.length - 1].time, '2026-06-29T17:27:00.000')
-assert.equal(partialIntradayTimeline.data.length, 43)
+assert.equal(partialIntradayTimeline.data.length, 2)
 assert.equal(partialIntradayTimeline.sessionOpen, '2026-06-29T16:45:00.000')
 assert.equal(partialIntradayTimeline.sessionClose, '2026-06-29T17:27:00.000')
 assert.equal(partialIntradayTimeline.data[0].close, 876)
-assert.equal(partialIntradayTimeline.data[42].close, 875.9)
-assert.equal(partialIntradayTimeline.data[30].close, undefined)
+assert.equal(partialIntradayTimeline.data[1].close, 875.9)
+assert.deepEqual(partialIntradayTimeline.sessions, [{
+  startIndex: 0,
+  endIndex: 1,
+  sessionOpen: '2026-06-29T16:45:00.000',
+  sessionClose: '2026-06-29T17:27:00.000',
+}])
 
 const timelineWithEarlyOpen = buildIntradayTimeline([
   { time: '2026-06-29T09:11:00', open: 865, high: 866, low: 864, close: 865.5 },
@@ -120,6 +126,9 @@ const timelineWithMidnightFeed = buildIntradayTimeline([
 ])
 assert.equal(timelineWithMidnightFeed.data[0].time, '2026-06-29T00:00:00.000')
 assert.equal(timelineWithMidnightFeed.data[timelineWithMidnightFeed.data.length - 1].time, '2026-06-29T09:10:00.000')
+assert.equal(timelineWithMidnightFeed.sessions.length, 2)
+assert.equal(timelineWithMidnightFeed.data[1].isBreak, true)
+assert.equal(timelineWithMidnightFeed.data[1].close, null)
 
 const timelineAcrossMidnight = buildIntradayTimeline([
   { time: '2026-06-29T09:00:00', open: 865, high: 866, low: 864, close: 865.5 },
@@ -127,19 +136,260 @@ const timelineAcrossMidnight = buildIntradayTimeline([
 ])
 assert.equal(timelineAcrossMidnight.data[0].time, '2026-06-29T09:00:00.000')
 assert.equal(timelineAcrossMidnight.data[timelineAcrossMidnight.data.length - 1].time, '2026-06-30T01:30:00.000')
-assert.equal(timelineAcrossMidnight.data.length, 991)
+assert.equal(timelineAcrossMidnight.data.length, 2)
+assert.equal(timelineAcrossMidnight.sessions.length, 1)
+assert.equal(timelineAcrossMidnight.sessions[0].sessionOpen, '2026-06-29T09:00:00.000')
+assert.equal(timelineAcrossMidnight.sessions[0].sessionClose, '2026-06-30T01:30:00.000')
 
 const shortIntradayRange = buildIntradayViewportRange(buildIntradayTimeline([
   { time: '2026-06-29T17:46:00', open: 875, high: 875, low: 875, close: 875 },
   { time: '2026-06-29T19:33:00', open: 879, high: 879, low: 879, close: 879 },
 ]).data)
-assert.deepEqual(shortIntradayRange, { start: 0, end: 107, focused: false })
+assert.deepEqual(shortIntradayRange, { start: 0, end: 1, focused: false })
 
 const fullIntradayRange = buildIntradayViewportRange(buildIntradayTimeline([
   { time: '2026-06-29T09:10:00', open: 865, high: 866, low: 864, close: 865.5 },
   { time: '2026-06-29T18:00:00', open: 878, high: 879, low: 877, close: 878.5 },
 ]).data)
-assert.deepEqual(fullIntradayRange, { start: 0, end: 530, focused: false })
+assert.deepEqual(fullIntradayRange, { start: 0, end: 1, focused: false })
+
+const icbcFullSessionAxis = buildIntradayTimeline([
+  { time: '2026-07-01T09:10:00', open: 870, high: 871, low: 869, close: 870.5 },
+  { time: '2026-07-01T10:00:00', open: 869, high: 870, low: 868, close: 869.5 },
+], { sourceKey: 'icbc' })
+assert.equal(icbcFullSessionAxis.data[0].time, '2026-07-01T09:10:00.000')
+assert.equal(icbcFullSessionAxis.data[icbcFullSessionAxis.data.length - 1].time, '2026-07-01T22:30:00.000')
+assert.equal(icbcFullSessionAxis.data[51].close, null)
+assert.deepEqual(icbcFullSessionAxis.latestSession, {
+  startIndex: 0,
+  endIndex: 800,
+  sessionOpen: '2026-07-01T09:10:00.000',
+  sessionClose: '2026-07-01T22:30:00.000',
+})
+assert.deepEqual(
+  buildIntradayViewportRange(icbcFullSessionAxis.data, { sourceKey: 'icbc' }),
+  { start: 0, end: 800, focused: false },
+)
+const sparseIcbcLineSegments = buildIntradayLineSegments(icbcFullSessionAxis.data)
+assert.equal(sparseIcbcLineSegments.length, 1)
+assert.equal(sparseIcbcLineSegments[0][0], 870.5)
+assert.equal(sparseIcbcLineSegments[0][50], 869.5)
+assert.equal(sparseIcbcLineSegments[0][51], null)
+
+const icbcTradingTimeline = buildIntradayTimeline([
+  { time: '2026-06-29T09:09:00', open: 869, high: 869, low: 869, close: 869 },
+  { time: '2026-06-29T09:10:00', open: 870, high: 871, low: 869, close: 870.5 },
+  { time: '2026-06-29T22:30:00', open: 875, high: 876, low: 874, close: 875.5 },
+  { time: '2026-06-29T22:31:00', open: 876, high: 876, low: 876, close: 876 },
+  { time: '2026-06-30T09:10:00', open: 880, high: 881, low: 879, close: 880.5 },
+  { time: '2026-07-04T10:00:00', open: 881, high: 881, low: 881, close: 881 },
+], { sourceKey: 'icbc' })
+assert.equal(icbcTradingTimeline.data.length, 1603)
+assert.equal(icbcTradingTimeline.data[0].time, '2026-06-29T09:10:00.000')
+assert.equal(icbcTradingTimeline.data[0].close, 870.5)
+assert.equal(icbcTradingTimeline.data[800].time, '2026-06-29T22:30:00.000')
+assert.equal(icbcTradingTimeline.data[800].close, 875.5)
+assert.equal(icbcTradingTimeline.data[801].time, '2026-06-29T22:31:00.000')
+assert.equal(icbcTradingTimeline.data[801].isBreak, true)
+assert.equal(icbcTradingTimeline.data[802].time, '2026-06-30T09:10:00.000')
+assert.equal(icbcTradingTimeline.data[1602].time, '2026-06-30T22:30:00.000')
+assert.deepEqual(icbcTradingTimeline.sessions, [
+  {
+    startIndex: 0,
+    endIndex: 800,
+    sessionOpen: '2026-06-29T09:10:00.000',
+    sessionClose: '2026-06-29T22:30:00.000',
+  },
+  {
+    startIndex: 802,
+    endIndex: 1602,
+    sessionOpen: '2026-06-30T09:10:00.000',
+    sessionClose: '2026-06-30T22:30:00.000',
+  },
+])
+const icbcSessionLineSegments = buildIntradayLineSegments(icbcTradingTimeline.data)
+assert.equal(icbcSessionLineSegments.length, 2)
+assert.equal(icbcSessionLineSegments[0][0], 870.5)
+assert.equal(icbcSessionLineSegments[0][800], 875.5)
+assert.equal(icbcSessionLineSegments[0][802], null)
+assert.equal(icbcSessionLineSegments[1][800], null)
+assert.equal(icbcSessionLineSegments[1][802], 880.5)
+
+const zheshangTradingTimeline = buildIntradayTimeline([
+  { time: '2026-06-29T08:59:00', open: 869, high: 869, low: 869, close: 869 },
+  { time: '2026-06-29T09:00:00', open: 870, high: 871, low: 869, close: 870.5 },
+  { time: '2026-07-01T03:00:00', open: 875, high: 876, low: 874, close: 875.5 },
+  { time: '2026-07-04T02:30:00', open: 880, high: 881, low: 879, close: 880.5 },
+  { time: '2026-07-04T02:31:00', open: 881, high: 881, low: 881, close: 881 },
+  { time: '2026-07-05T10:00:00', open: 882, high: 882, low: 882, close: 882 },
+], { sourceKey: 'jdjygold_zheshang', now: '2026-07-01T11:00:00' })
+assert.equal(zheshangTradingTimeline.data.length, 4325)
+assert.equal(zheshangTradingTimeline.data[0].time, '2026-06-29T00:00:00.000')
+assert.equal(zheshangTradingTimeline.data[540].time, '2026-06-29T09:00:00.000')
+assert.equal(zheshangTradingTimeline.data[540].close, 870.5)
+assert.equal(zheshangTradingTimeline.data[1440].time, '2026-06-30T00:00:00.000')
+assert.equal(zheshangTradingTimeline.data[1440].close, null)
+assert.equal(zheshangTradingTimeline.data[1441].isBreak, true)
+assert.equal(zheshangTradingTimeline.data[1442].time, '2026-07-01T00:00:00.000')
+assert.equal(zheshangTradingTimeline.data[1622].time, '2026-07-01T03:00:00.000')
+assert.equal(zheshangTradingTimeline.data[1622].close, 875.5)
+assert.equal(zheshangTradingTimeline.data[2882].time, '2026-07-02T00:00:00.000')
+assert.equal(zheshangTradingTimeline.data[2882].close, null)
+assert.equal(zheshangTradingTimeline.data[2883].isBreak, true)
+assert.equal(zheshangTradingTimeline.data[2884].time, '2026-07-04T00:00:00.000')
+assert.equal(zheshangTradingTimeline.data[3034].time, '2026-07-04T02:30:00.000')
+assert.equal(zheshangTradingTimeline.data[3034].close, 880.5)
+assert.equal(zheshangTradingTimeline.data[3035].time, '2026-07-04T02:31:00.000')
+assert.equal(zheshangTradingTimeline.data[3035].close, null)
+assert.deepEqual(zheshangTradingTimeline.sessions, [
+  {
+    startIndex: 0,
+    endIndex: 1440,
+    sessionOpen: '2026-06-29T00:00:00.000',
+    sessionClose: '2026-06-30T00:00:00.000',
+  },
+  {
+    startIndex: 1442,
+    endIndex: 2882,
+    sessionOpen: '2026-07-01T00:00:00.000',
+    sessionClose: '2026-07-02T00:00:00.000',
+  },
+  {
+    startIndex: 2884,
+    endIndex: 4324,
+    sessionOpen: '2026-07-04T00:00:00.000',
+    sessionClose: '2026-07-05T00:00:00.000',
+  },
+])
+assert.deepEqual(
+  buildIntradayViewportRange(zheshangTradingTimeline.data, { sourceKey: 'jdjygold_zheshang', now: '2026-07-01T11:00:00' }),
+  { start: 1442, end: 2882, focused: true },
+)
+const zheshangNaturalDayLabels = buildAxisLabelLookup(
+  zheshangTradingTimeline.data,
+  '1min',
+  { startIndex: 1442, endIndex: 2882 },
+)
+assert.deepEqual([...zheshangNaturalDayLabels.textByValue.values()], ['7月1日\n00:00', '06:00', '12:00', '18:00', '24:00'])
+
+const zheshangMondayBeforeOpen = buildIntradayTimeline([
+  { time: '2026-07-04T02:30:00', open: 880, high: 881, low: 879, close: 880.5 },
+], { sourceKey: 'jdjygold_zheshang', now: '2026-07-06T08:30:00' })
+const zheshangMondayRange = buildIntradayViewportRange(
+  zheshangMondayBeforeOpen.data,
+  { sourceKey: 'jdjygold_zheshang', now: '2026-07-06T08:30:00' },
+)
+assert.equal(zheshangMondayBeforeOpen.data[zheshangMondayRange.start].time, '2026-07-06T00:00:00.000')
+assert.equal(zheshangMondayBeforeOpen.data[zheshangMondayRange.end].time, '2026-07-07T00:00:00.000')
+assert.deepEqual(buildVisibleExtrema(zheshangMondayBeforeOpen.data, zheshangMondayRange.start, zheshangMondayRange.end), {
+  high: null,
+  low: null,
+})
+
+const zheshangSaturdayAfterClose = buildIntradayTimeline([
+  { time: '2026-07-04T02:30:00', open: 880, high: 881, low: 879, close: 880.5 },
+], { sourceKey: 'jdjygold_zheshang', now: '2026-07-04T12:00:00' })
+const zheshangSaturdayRange = buildIntradayViewportRange(
+  zheshangSaturdayAfterClose.data,
+  { sourceKey: 'jdjygold_zheshang', now: '2026-07-04T12:00:00' },
+)
+assert.equal(zheshangSaturdayAfterClose.data[zheshangSaturdayRange.start].time, '2026-07-04T00:00:00.000')
+assert.equal(zheshangSaturdayAfterClose.data[zheshangSaturdayRange.start + 150].close, 880.5)
+assert.equal(zheshangSaturdayAfterClose.data[zheshangSaturdayRange.start + 151].close, null)
+assert.equal(zheshangSaturdayAfterClose.data[zheshangSaturdayRange.end].time, '2026-07-05T00:00:00.000')
+
+const zheshangSundayBlank = buildIntradayTimeline([
+  { time: '2026-07-04T02:30:00', open: 880, high: 881, low: 879, close: 880.5 },
+], { sourceKey: 'jdjygold_zheshang', now: '2026-07-05T12:00:00' })
+const zheshangSundayRange = buildIntradayViewportRange(
+  zheshangSundayBlank.data,
+  { sourceKey: 'jdjygold_zheshang', now: '2026-07-05T12:00:00' },
+)
+assert.equal(zheshangSundayBlank.data[zheshangSundayRange.start].time, '2026-07-05T00:00:00.000')
+assert.equal(zheshangSundayBlank.data[zheshangSundayRange.end].time, '2026-07-06T00:00:00.000')
+assert.deepEqual(buildVisibleExtrema(zheshangSundayBlank.data, zheshangSundayRange.start, zheshangSundayRange.end), {
+  high: null,
+  low: null,
+})
+
+const minshengTradingTimeline = buildIntradayTimeline([
+  { time: '2026-06-29T00:30:00', open: 868, high: 868, low: 868, close: 868 },
+  { time: '2026-06-29T09:09:00', open: 869, high: 869, low: 869, close: 869 },
+  { time: '2026-06-29T09:10:00', open: 870, high: 871, low: 869, close: 870.5 },
+  { time: '2026-06-30T02:00:00', open: 875, high: 876, low: 874, close: 875.5 },
+  { time: '2026-06-30T02:01:00', open: 876, high: 876, low: 876, close: 876 },
+  { time: '2026-06-30T09:10:00', open: 877, high: 878, low: 876, close: 877.5 },
+  { time: '2026-07-04T02:00:00', open: 880, high: 881, low: 879, close: 880.5 },
+  { time: '2026-07-04T02:01:00', open: 881, high: 881, low: 881, close: 881 },
+], { sourceKey: 'hongyun_gold_reference' })
+assert.equal(minshengTradingTimeline.data.length, 3035)
+assert.equal(minshengTradingTimeline.data[0].time, '2026-06-29T09:10:00.000')
+assert.equal(minshengTradingTimeline.data[0].close, 870.5)
+assert.equal(minshengTradingTimeline.data[1010].time, '2026-06-30T02:00:00.000')
+assert.equal(minshengTradingTimeline.data[1010].close, 875.5)
+assert.equal(minshengTradingTimeline.data[1011].time, '2026-06-30T02:01:00.000')
+assert.equal(minshengTradingTimeline.data[1011].isBreak, true)
+assert.equal(minshengTradingTimeline.data[1012].time, '2026-06-30T09:10:00.000')
+assert.equal(minshengTradingTimeline.data[2022].time, '2026-07-01T02:00:00.000')
+assert.equal(minshengTradingTimeline.data[2023].time, '2026-07-01T02:01:00.000')
+assert.equal(minshengTradingTimeline.data[2023].isBreak, true)
+assert.equal(minshengTradingTimeline.data[2024].time, '2026-07-03T09:10:00.000')
+assert.equal(minshengTradingTimeline.data[3034].time, '2026-07-04T02:00:00.000')
+assert.equal(minshengTradingTimeline.data[3034].close, 880.5)
+assert.deepEqual(minshengTradingTimeline.sessions, [
+  {
+    startIndex: 0,
+    endIndex: 1010,
+    sessionOpen: '2026-06-29T09:10:00.000',
+    sessionClose: '2026-06-30T02:00:00.000',
+  },
+  {
+    startIndex: 1012,
+    endIndex: 2022,
+    sessionOpen: '2026-06-30T09:10:00.000',
+    sessionClose: '2026-07-01T02:00:00.000',
+  },
+  {
+    startIndex: 2024,
+    endIndex: 3034,
+    sessionOpen: '2026-07-03T09:10:00.000',
+    sessionClose: '2026-07-04T02:00:00.000',
+  },
+])
+
+const multiSessionTimeline = buildIntradayTimeline([
+  { time: '2026-06-29T09:10:00', open: 870, high: 871, low: 869, close: 870.5 },
+  { time: '2026-06-29T22:30:00', open: 875, high: 876, low: 874, close: 875.5 },
+  { time: '2026-06-30T09:10:00', open: 880, high: 881, low: 879, close: 880.5 },
+  { time: '2026-06-30T10:00:00', open: 881, high: 882, low: 880, close: 881.5 },
+])
+assert.equal(multiSessionTimeline.data.length, 5)
+assert.equal(multiSessionTimeline.data[2].isBreak, true)
+assert.equal(multiSessionTimeline.data[2].close, null)
+assert.deepEqual(multiSessionTimeline.sessions, [
+  {
+    startIndex: 0,
+    endIndex: 1,
+    sessionOpen: '2026-06-29T09:10:00.000',
+    sessionClose: '2026-06-29T22:30:00.000',
+  },
+  {
+    startIndex: 3,
+    endIndex: 4,
+    sessionOpen: '2026-06-30T09:10:00.000',
+    sessionClose: '2026-06-30T10:00:00.000',
+  },
+])
+assert.deepEqual(multiSessionTimeline.latestSession, multiSessionTimeline.sessions[1])
+assert.deepEqual(buildIntradayViewportRange(multiSessionTimeline.data), { start: 3, end: 4, focused: true })
+const latestSessionLookup = buildAxisLabelLookup(multiSessionTimeline.data, '1min', { startIndex: 3, endIndex: 4 })
+assert.deepEqual([...latestSessionLookup.textByValue.values()], ['6月30日\n09:10', '10:00'])
+assert.deepEqual(buildVisibleExtrema(multiSessionTimeline.data, 0, 4), {
+  high: { index: 4, value: 882 },
+  low: { index: 0, value: 869 },
+})
+const breakSafeYAxis = buildYAxisScaleForRange(multiSessionTimeline.data, 0, 4, null, 4)
+assert.ok(breakSafeYAxis.min > 800)
 
 const extremaRows = [
   { time: '2026-06-29T09:10:00', open: 867, high: 869.1, low: 863.43, close: 866.5 },
@@ -274,6 +524,8 @@ assert.notEqual(
 )
 
 assert.equal(buildZoomMinValueSpan('1min', 200), 29)
+assert.equal(buildZoomMinValueSpan('1min', 200, { visibleSpan: 19 }), 19)
+assert.equal(buildZoomMinValueSpan('1min', 200, { visibleSpan: 0 }), 0)
 assert.equal(buildZoomMinValueSpan('1day', 40), 6)
 assert.equal(buildZoomMinValueSpan('1month', 40), 5)
 assert.equal(buildZoomMinValueSpan('1day', 3), 2)
