@@ -47,15 +47,24 @@ const snapshot = {
     reasons: ['MA golden cross', 'price broke above Bollinger upper band', 'news sentiment is positive'],
     risks: [],
   },
+  predicted_range: {
+    low: 545.84,
+    high: 556.76,
+    range_percent: 0.02,
+    unit: 'CNY/g',
+  },
   refresh_seconds: 2,
   max_data_delay_seconds: 5,
 }
+
+const klineBaseTime = new Date()
+klineBaseTime.setHours(12, 0, 0, 0)
 
 const klines = Array.from({ length: 60 }, (_, index) => {
   const close = 551 + index * 0.03 + Math.sin(index / 5) * 0.35
   const open = close - 0.08
   return {
-    time: new Date(Date.now() - (59 - index) * 60_000).toISOString(),
+    time: new Date(klineBaseTime.getTime() - (59 - index) * 60_000).toISOString(),
     open,
     high: close + 0.18,
     low: open - 0.16,
@@ -240,12 +249,16 @@ let monthlyReviewsRequestCount = 0
 let snapshotRequestCount = 0
 let klineRequestCount = 0
 let latestKlineSource = ''
+let alertRules = []
+let testEmailCount = 0
 
 test.beforeEach(async ({ page }) => {
   monthlyReviewsRequestCount = 0
   snapshotRequestCount = 0
   klineRequestCount = 0
   latestKlineSource = ''
+  alertRules = []
+  testEmailCount = 0
 
   await page.route('**/api/config/public', async (route) => {
     await route.fulfill({
@@ -261,8 +274,47 @@ test.beforeEach(async ({ page }) => {
             { key: 'jdjygold_zheshang', label: '浙商银行积存金', requires_api_key: false },
           ],
         },
+        alerts: {
+          enabled: false,
+          predicted_breakout_step_cny_g: 2,
+          default_source: 'icbc',
+          smtp_configured: true,
+        },
       },
     })
+  })
+
+  await page.route('**/api/alerts/rules**', async (route) => {
+    const request = route.request()
+    if (request.method() === 'GET') {
+      await route.fulfill({ json: { rules: alertRules, smtp_configured: true } })
+      return
+    }
+    if (request.method() === 'POST') {
+      const body = JSON.parse(request.postData())
+      const rule = {
+        id: alertRules.length + 1,
+        enabled: body.enabled ?? true,
+        source: body.source || 'icbc',
+        recipient_email: body.recipient_email,
+        target_high_price: Number(body.target_high_price),
+        target_low_price: Number(body.target_low_price),
+        notify_on_custom_high: Boolean(body.notify_on_custom_high),
+        notify_on_custom_low: Boolean(body.notify_on_custom_low),
+        notify_on_predicted_high: Boolean(body.notify_on_predicted_high),
+        notify_on_predicted_low: Boolean(body.notify_on_predicted_low),
+        state: null,
+      }
+      alertRules = [rule]
+      await route.fulfill({ json: { rule } })
+      return
+    }
+    await route.fulfill({ json: { deleted: true } })
+  })
+
+  await page.route('**/api/alerts/test-email', async (route) => {
+    testEmailCount += 1
+    await route.fulfill({ json: { sent: true } })
   })
 
   await page.route('**/api/market/klines**', async (route) => {
@@ -319,6 +371,8 @@ test('renders realtime market snapshot and recommendation', async ({ page }) => 
   await expect(page.getByTestId('connection-status')).toContainText('已连接')
   await expect(page.getByTestId('current-price')).toContainText('552.05')
   await expect(page.getByTestId('price-source-name')).toContainText('工商银行积存金')
+  await expect(page.getByTestId('predicted-low')).toContainText('545.84')
+  await expect(page.getByTestId('predicted-high')).toContainText('556.76')
   await expect(page.locator('.price-meta')).toContainText('刷新 2s')
   await expect(page.locator('.brand-logo-img')).toBeVisible()
   await expect(page.locator('.asset-icon-tile img')).toHaveCount(2)
@@ -358,7 +412,12 @@ test('switches the kline data source without changing 30 day commodity reviews',
   await expect(page.getByTestId('price-source-name')).toContainText('工商银行积存金')
   expect(monthlyReviewsRequestCount).toBe(1)
 
+  const switchedKlineResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return url.pathname === '/api/market/klines' && url.searchParams.get('source') === 'jdjygold_zheshang'
+  })
   await page.getByTestId('price-source-select').selectOption('jdjygold_zheshang')
+  await switchedKlineResponse
 
   await expect(page.getByTestId('price-source-name')).toContainText('浙商银行积存金')
   expect(latestKlineSource).toBe('jdjygold_zheshang')
@@ -407,4 +466,26 @@ test('calculates portfolio pnl from user inputs', async ({ page }) => {
   await page.getByRole('button', { name: /计算/ }).click()
 
   await expect(page.getByTestId('pnl-amount')).toContainText('36.15')
+})
+
+test('saves alert rule and sends test email', async ({ page }) => {
+  await page.goto('/')
+
+  await expect(page.getByTestId('alert-panel')).toBeVisible()
+  await page.getByTestId('alert-email').fill('me@example.com')
+  await page.getByTestId('alert-target-high').fill('900')
+  await page.getByTestId('alert-target-low').fill('870')
+  await page.getByTestId('alert-custom-high').check()
+  await page.getByTestId('alert-custom-low').check()
+  await page.getByTestId('alert-save').click()
+
+  await expect(page.getByTestId('alert-status')).toContainText('已保存')
+  expect(alertRules[0].recipient_email).toBe('me@example.com')
+  expect(alertRules[0].target_high_price).toBe(900)
+  expect(alertRules[0].notify_on_custom_high).toBe(true)
+
+  await page.getByTestId('alert-test-email').click()
+
+  await expect(page.getByTestId('alert-status')).toContainText('测试邮件已发送')
+  expect(testEmailCount).toBe(1)
 })

@@ -60,6 +60,50 @@ realtime:
 
 前端每 2 秒刷新一次。后端拒绝超过 5 秒的数据，防止交易视图展示过期价格。
 
+## 邮件提醒
+
+```yaml
+alerts:
+  enabled: false
+  check_interval_seconds: 15
+  predicted_breakout_step_cny_g: 2
+  storage_path: "data/price_alerts.sqlite"
+  default_source: "icbc"
+  email:
+    smtp_host_env: "ALERT_SMTP_HOST"
+    smtp_port_env: "ALERT_SMTP_PORT"
+    smtp_username_env: "ALERT_SMTP_USERNAME"
+    smtp_password_env: "ALERT_SMTP_PASSWORD"
+    from_email_env: "ALERT_FROM_EMAIL"
+    use_tls_env: "ALERT_SMTP_USE_TLS"
+```
+
+- `enabled`: 是否启动后端邮件提醒 worker。默认关闭；前端仍可保存规则和发送测试邮件。
+- `check_interval_seconds`: worker 检查行情和提醒规则的间隔。
+- `predicted_breakout_step_cny_g`: 系统预估高低点首次触达后，价格每继续突破多少 `CNY/g` 再次提醒。默认 `2`。
+- `storage_path`: 提醒规则和触发状态的 SQLite 文件路径。
+- `default_source`: 新建提醒规则时默认使用的行情源。
+- `email.*_env`: SMTP 配置对应的环境变量名。真实邮箱密码、授权码和发件地址只写环境变量，不写入 `config.yaml`。
+
+SMTP 环境变量示例：
+
+```env
+ALERT_SMTP_HOST=smtp.example.com
+ALERT_SMTP_PORT=587
+ALERT_SMTP_USERNAME=alerts@example.com
+ALERT_SMTP_PASSWORD=your-smtp-password-or-app-token
+ALERT_FROM_EMAIL=alerts@example.com
+ALERT_SMTP_USE_TLS=true
+```
+
+预估高低点提醒规则：
+
+- 当前价第一次达到系统预估高点时立即发邮件。
+- 高点触发后，当前价每比上一次高点提醒价再涨 `2 CNY/g` 发一次。
+- 当前价第一次达到系统预估低点时立即发邮件。
+- 低点触发后，当前价每比上一次低点提醒价再跌 `2 CNY/g` 发一次。
+- 预估高低点变化本身不单独发邮件，只有触达或继续突破时提醒。
+
 ## 人民币展示
 
 后端保留数据源原始 `USD/oz` 报价，并额外返回前端展示用的 `CNY/g` 字段。

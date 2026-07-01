@@ -80,3 +80,34 @@ export function calculatePnl(payload) {
     body: JSON.stringify(payload),
   })
 }
+
+export function getAlertRules() {
+  return request('/api/alerts/rules')
+}
+
+export function createAlertRule(payload) {
+  return request('/api/alerts/rules', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateAlertRule(id, payload) {
+  return request(`/api/alerts/rules/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteAlertRule(id) {
+  return request(`/api/alerts/rules/${id}`, {
+    method: 'DELETE',
+  })
+}
+
+export function sendTestEmail(payload) {
+  return request('/api/alerts/test-email', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}

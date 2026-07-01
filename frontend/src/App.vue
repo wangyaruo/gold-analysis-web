@@ -3,6 +3,7 @@ import {computed, onMounted, onUnmounted, reactive, ref} from 'vue'
 import {
   Activity,
   AlertTriangle,
+  Bell,
   Calculator,
   ChevronRight,
   Clock3,
@@ -10,19 +11,35 @@ import {
   Gauge,
   Globe,
   LineChart,
+  Mail,
   Newspaper,
   RefreshCw,
+  Save,
+  Send,
   TrendingUp,
+  Trash2,
 } from 'lucide-vue-next'
 import PriceChart from './components/PriceChart.vue'
 import SentimentGauge from './components/SentimentGauge.vue'
 import ThirtyDayReviewChart from './components/ThirtyDayReviewChart.vue'
-import {calculatePnl, getKlines, getMarketSnapshot, getMonthlyReviews, getPublicConfig} from './api'
+import {
+  calculatePnl,
+  createAlertRule,
+  deleteAlertRule,
+  getAlertRules,
+  getKlines,
+  getMarketSnapshot,
+  getMonthlyReviews,
+  getPublicConfig,
+  sendTestEmail,
+  updateAlertRule,
+} from './api'
 import goldBarsHero from './assets/ui/gold-bars-hero.jpg'
 import goldMarketWave from './assets/ui/gold-market-wave.jpg'
 import goldShieldChart from './assets/ui/gold-shield-chart.png'
 import goldTrendIcon from './assets/ui/gold-trend-icon.png'
-import {buildTodayRange} from './utils/dayRange'
+import {buildPredictedDailyRange, buildTodayRange} from './utils/dayRange'
+import {recordRealtimeTick} from './utils/realtimeTicks'
 import {sentimentScoreToGaugeValue} from './utils/sentimentGauge'
 
 const snapshot = ref(null)
@@ -36,6 +53,7 @@ const timer = ref(null)
 const pnl = ref(null)
 const selectedSource = ref('')
 const klines = ref([])
+const realtimeTicks = ref([])
 const klinesLoading = ref(false)
 const monthlyReviews = ref([])
 const monthlyReviewLoading = ref(false)
@@ -52,6 +70,22 @@ const portfolio = reactive({
   buy_price: 540,
   quantity: 1,
 })
+const alertRules = ref([])
+const alertRuleId = ref(null)
+const alertLoading = ref(false)
+const alertSaving = ref(false)
+const alertStatus = ref('')
+const alertForm = reactive({
+  enabled: true,
+  source: '',
+  recipient_email: '',
+  target_high_price: null,
+  target_low_price: null,
+  notify_on_custom_high: false,
+  notify_on_custom_low: false,
+  notify_on_predicted_high: true,
+  notify_on_predicted_low: true,
+})
 const pageBackgroundStyle = {'--page-wave-image': `url(${goldMarketWave})`}
 const priceCardStyle = {'--price-card-image': `url(${goldBarsHero})`}
 
@@ -65,6 +99,18 @@ const sourceOptions = computed(() => publicConfig.value?.data_sources?.options |
 const priceSource = computed(() => snapshot.value?.price?.source || '--')
 const stopLoss = computed(() => snapshot.value?.indicators?.stop_loss?.display_stop_loss || snapshot.value?.indicators?.stop_loss?.stop_loss || null)
 const todayRange = computed(() => buildTodayRange(klines.value, currentPrice.value, new Date(), snapshot.value?.today_range))
+const predictedDailyRange = computed(() => {
+  const backendRange = snapshot.value?.predicted_range
+  if (backendRange?.low && backendRange?.high) return backendRange
+  return buildPredictedDailyRange(
+    currentPrice.value,
+    0.02,
+    klines.value,
+    new Date(),
+    snapshot.value?.today_range,
+  )
+})
+const activeRealtimeTicks = computed(() => realtimeTicks.value.filter((tick) => tick.sourceKey === selectedSource.value))
 const recommendation = computed(() => snapshot.value?.recommendation || {
   action: 'hold',
   confidence: 0,
@@ -148,12 +194,20 @@ const activeSourceLabel = computed(() => {
   return found?.label || snapshot.value?.price?.source || selectedSource.value || '--'
 })
 
+const alertSmtpLabel = computed(() => {
+  if (publicConfig.value?.alerts?.smtp_configured) return 'SMTP 已配置'
+  return 'SMTP 未配置'
+})
+
+const alertBreakoutStep = computed(() => publicConfig.value?.alerts?.predicted_breakout_step_cny_g || 2)
+
 async function loadConfig() {
   publicConfig.value = await getPublicConfig()
   const defaults = publicConfig.value.portfolio_defaults || {}
   portfolio.buy_price = Number(defaults.buy_price || portfolio.buy_price)
   portfolio.quantity = Number(defaults.quantity || portfolio.quantity)
   selectedSource.value = publicConfig.value.data_sources?.active || sourceOptions.value[0]?.key || ''
+  alertForm.source = publicConfig.value.alerts?.default_source || selectedSource.value
 }
 
 async function loadKlines() {
@@ -182,6 +236,105 @@ async function loadMonthlyReviews() {
   }
 }
 
+function applyAlertRule(rule) {
+  if (!rule) return
+  alertRuleId.value = rule.id
+  alertForm.enabled = rule.enabled !== false
+  alertForm.source = rule.source || selectedSource.value
+  alertForm.recipient_email = rule.recipient_email || ''
+  alertForm.target_high_price = rule.target_high_price ?? null
+  alertForm.target_low_price = rule.target_low_price ?? null
+  alertForm.notify_on_custom_high = Boolean(rule.notify_on_custom_high)
+  alertForm.notify_on_custom_low = Boolean(rule.notify_on_custom_low)
+  alertForm.notify_on_predicted_high = rule.notify_on_predicted_high !== false
+  alertForm.notify_on_predicted_low = rule.notify_on_predicted_low !== false
+}
+
+async function loadAlertRules() {
+  alertLoading.value = true
+  try {
+    const data = await getAlertRules()
+    alertRules.value = data.rules || []
+    if (alertRules.value.length) {
+      applyAlertRule(alertRules.value[0])
+    }
+  } catch (error) {
+    alertStatus.value = '提醒规则暂不可用'
+  } finally {
+    alertLoading.value = false
+  }
+}
+
+function alertPayload() {
+  return {
+    enabled: alertForm.enabled,
+    source: alertForm.source || selectedSource.value,
+    recipient_email: String(alertForm.recipient_email || '').trim(),
+    target_high_price: alertForm.target_high_price === '' ? null : alertForm.target_high_price,
+    target_low_price: alertForm.target_low_price === '' ? null : alertForm.target_low_price,
+    notify_on_custom_high: alertForm.notify_on_custom_high,
+    notify_on_custom_low: alertForm.notify_on_custom_low,
+    notify_on_predicted_high: alertForm.notify_on_predicted_high,
+    notify_on_predicted_low: alertForm.notify_on_predicted_low,
+  }
+}
+
+async function saveAlertRule() {
+  alertSaving.value = true
+  alertStatus.value = ''
+  try {
+    const payload = alertPayload()
+    const data = alertRuleId.value
+      ? await updateAlertRule(alertRuleId.value, payload)
+      : await createAlertRule(payload)
+    applyAlertRule(data.rule)
+    alertRules.value = [data.rule]
+    alertStatus.value = '已保存'
+  } catch (error) {
+    alertStatus.value = error.message
+  } finally {
+    alertSaving.value = false
+  }
+}
+
+async function sendAlertTest() {
+  alertSaving.value = true
+  alertStatus.value = ''
+  try {
+    await sendTestEmail({
+      recipient_email: String(alertForm.recipient_email || '').trim(),
+      source_label: activeSourceLabel.value,
+      current_price: currentPrice.value,
+      display_unit: displayUnit.value,
+      predicted_range: predictedDailyRange.value,
+      event_time: formattedTime.value,
+    })
+    alertStatus.value = '测试邮件已发送'
+  } catch (error) {
+    alertStatus.value = error.message
+  } finally {
+    alertSaving.value = false
+  }
+}
+
+async function removeAlertRule() {
+  if (!alertRuleId.value) {
+    alertStatus.value = '暂无规则'
+    return
+  }
+  alertSaving.value = true
+  try {
+    await deleteAlertRule(alertRuleId.value)
+    alertRules.value = []
+    alertRuleId.value = null
+    alertStatus.value = '已删除'
+  } catch (error) {
+    alertStatus.value = error.message
+  } finally {
+    alertSaving.value = false
+  }
+}
+
 async function selectPeriod(key) {
   if (selectedPeriod.value === key) return
   selectedPeriod.value = key
@@ -206,14 +359,29 @@ function syncLastCandle() {
   klines.value = arr
 }
 
+function recordRealtimeSample(sampleTime = new Date()) {
+  if (!selectedSource.value || !currentPrice.value) return
+  realtimeTicks.value = recordRealtimeTick(realtimeTicks.value, {
+    sourceKey: selectedSource.value,
+    time: sampleTime,
+    price: currentPrice.value,
+  }, {
+    now: sampleTime,
+    maxAgeMs: 24 * 60 * 60 * 1000,
+    maxPointsPerSource: 12_000,
+  })
+}
+
 async function refreshSnapshot() {
   loading.value = true
   errorMessage.value = ''
   try {
     snapshot.value = await getMarketSnapshot(selectedSource.value)
     connected.value = true
-    lastUpdated.value = new Date()
+    const now = new Date()
+    lastUpdated.value = now
     nextRefreshAt.value = new Date(Date.now() + refreshSeconds.value * 1000)
+    recordRealtimeSample(now)
     syncLastCandle()
     await updatePnl({silent: true})
   } catch (error) {
@@ -256,6 +424,7 @@ function scheduleRefresh() {
 onMounted(async () => {
   try {
     await loadConfig()
+    await loadAlertRules()
   } catch (error) {
     errorMessage.value = error.message
   }
@@ -322,6 +491,16 @@ onUnmounted(() => {
               <span class="price-range-chip range-high">
                 <span class="range-label">今日最高</span>
                 <strong>{{ todayRange ? todayRange.high.toFixed(2) : '--' }}</strong>
+                <span>{{ displayUnit }}</span>
+              </span>
+              <span class="price-range-chip range-predict-low">
+                <span class="range-label">预测低点</span>
+                <strong data-testid="predicted-low">{{ predictedDailyRange ? predictedDailyRange.low.toFixed(2) : '--' }}</strong>
+                <span>{{ displayUnit }}</span>
+              </span>
+              <span class="price-range-chip range-predict-high">
+                <span class="range-label">预测高点</span>
+                <strong data-testid="predicted-high">{{ predictedDailyRange ? predictedDailyRange.high.toFixed(2) : '--' }}</strong>
                 <span>{{ displayUnit }}</span>
               </span>
             </div>
@@ -407,6 +586,7 @@ onUnmounted(() => {
             :period="selectedPeriod"
             :source-key="selectedSource"
             :reset-key="klineResetKey"
+            :realtime-ticks="activeRealtimeTicks"
           />
         </article>
 
@@ -503,6 +683,91 @@ onUnmounted(() => {
           </div>
         </article>
         </section>
+      </section>
+
+      <section class="card alert-settings-section" data-testid="alert-panel">
+        <div class="alert-settings-head">
+          <div>
+            <p class="card-label">邮件提醒</p>
+            <h2 class="card-title">价格触达 · 预估边界突破</h2>
+          </div>
+          <div class="alert-state-pill">
+            <Bell :size="14"/>
+            <span>{{ alertSmtpLabel }}</span>
+          </div>
+        </div>
+        <form class="alert-form" @submit.prevent="saveAlertRule">
+          <label class="alert-field alert-field-email">
+            <span>收件邮箱</span>
+            <span class="alert-input-wrap">
+              <Mail :size="15"/>
+              <input
+                v-model="alertForm.recipient_email"
+                data-testid="alert-email"
+                type="email"
+                autocomplete="email"
+                placeholder="name@example.com"
+                required
+              >
+            </span>
+          </label>
+          <label class="alert-field">
+            <span>行情源</span>
+            <select v-model="alertForm.source" data-testid="alert-source">
+              <option v-for="source in sourceOptions" :key="source.key" :value="source.key">
+                {{ source.label }}
+              </option>
+            </select>
+          </label>
+          <label class="alert-field">
+            <span>高价目标</span>
+            <input v-model.number="alertForm.target_high_price" data-testid="alert-target-high" type="number" min="0.01" step="0.01">
+          </label>
+          <label class="alert-field">
+            <span>低价目标</span>
+            <input v-model.number="alertForm.target_low_price" data-testid="alert-target-low" type="number" min="0.01" step="0.01">
+          </label>
+          <div class="alert-switches">
+            <label>
+              <input v-model="alertForm.enabled" data-testid="alert-enabled" type="checkbox">
+              <span>启用</span>
+            </label>
+            <label>
+              <input v-model="alertForm.notify_on_custom_high" data-testid="alert-custom-high" type="checkbox">
+              <span>高价</span>
+            </label>
+            <label>
+              <input v-model="alertForm.notify_on_custom_low" data-testid="alert-custom-low" type="checkbox">
+              <span>低价</span>
+            </label>
+            <label>
+              <input v-model="alertForm.notify_on_predicted_high" data-testid="alert-predicted-high" type="checkbox">
+              <span>预估高点</span>
+            </label>
+            <label>
+              <input v-model="alertForm.notify_on_predicted_low" data-testid="alert-predicted-low" type="checkbox">
+              <span>预估低点</span>
+            </label>
+          </div>
+          <div class="alert-actions">
+            <button type="submit" data-testid="alert-save" :disabled="alertSaving || alertLoading">
+              <Save :size="15"/>
+              保存
+            </button>
+            <button type="button" data-testid="alert-test-email" :disabled="alertSaving || !alertForm.recipient_email" @click="sendAlertTest">
+              <Send :size="15"/>
+              测试邮件
+            </button>
+            <button type="button" class="alert-delete-button" :disabled="alertSaving || !alertRuleId" @click="removeAlertRule">
+              <Trash2 :size="15"/>
+              删除
+            </button>
+          </div>
+        </form>
+        <div class="alert-settings-foot">
+          <span data-testid="alert-status">{{ alertStatus || `预估边界每突破 ${alertBreakoutStep} ${displayUnit} 续发一次` }}</span>
+          <span v-if="alertRuleId">规则 #{{ alertRuleId }}</span>
+        </div>
       </section>
 
       <section class="card monthly-review-section" data-testid="monthly-reviews-panel">

@@ -23,6 +23,20 @@ realtime:
   frontend_refresh_seconds: 2
   max_data_delay_seconds: 5
 
+alerts:
+  enabled: false
+  check_interval_seconds: 15
+  predicted_breakout_step_cny_g: 2
+  storage_path: "data/price_alerts.sqlite"
+  default_source: "icbc"
+  email:
+    smtp_host_env: "ALERT_SMTP_HOST"
+    smtp_port_env: "ALERT_SMTP_PORT"
+    smtp_username_env: "ALERT_SMTP_USERNAME"
+    smtp_password_env: "ALERT_SMTP_PASSWORD"
+    from_email_env: "ALERT_FROM_EMAIL"
+    use_tls_env: "ALERT_SMTP_USE_TLS"
+
 storage:
   kline_db_path: "data/kline_bars.sqlite"
   kline_retention:
