@@ -1,36 +1,36 @@
-# Price Email Alerts Design
+# 价格邮件提醒功能设计
 
-## Scope
+## 范围
 
-Add a single-user email notification feature for the existing gold analysis dashboard. The feature lets the user receive email when the live display price reaches custom thresholds or crosses the system-predicted daily high/low range. It builds on the current FastAPI backend, Vue dashboard, `config.yaml` business configuration, and existing realtime market polling flow.
+为现有黄金行情分析面板新增一个单用户邮件提醒功能。用户可以在实时展示价格达到自定义阈值，或触达/突破系统预估的日内高点、低点时收到邮件通知。该功能基于现有 FastAPI 后端、Vue 仪表盘、根目录 `config.yaml` 业务配置，以及现有实时行情轮询流程实现。
 
-This design does not introduce multi-user login, account ownership, SMS, push notifications, or brokerage/trading actions.
+本设计不引入多用户登录、账号归属、短信、移动推送或交易下单能力。
 
-## Goals
+## 目标
 
-- Let the user configure one or more email alert rules from the dashboard.
-- Send email when the current display price reaches a user-defined high or low target.
-- Send email when the current display price first touches the system-predicted high or low.
-- Continue sending email when price keeps moving beyond the touched predicted boundary by each additional `2 CNY/g` step.
-- Keep alert decisions on the backend so notifications work even when the browser is closed.
-- Use one shared predicted range calculation for both dashboard display and email alert evaluation.
+- 用户可以在仪表盘里配置一个或多个邮件提醒规则。
+- 当前展示价格达到用户自定义高价或低价时发送邮件。
+- 当前展示价格第一次触达系统预估高点或低点时发送邮件。
+- 首次触达后，如果价格继续朝同一方向每突破 `2 CNY/g`，继续发送一次邮件。
+- 提醒判断放在后端执行，浏览器关闭后仍可正常提醒。
+- 仪表盘展示和邮件提醒共用同一套预估区间计算结果，避免页面和邮件判断不一致。
 
-## Architecture
+## 架构
 
-The backend owns alert evaluation. A new alert service periodically fetches the active price source, computes the same display price and predicted daily range used by the UI, evaluates enabled alert rules, and sends email through SMTP when a rule fires.
+后端负责提醒判断。新增提醒服务定时获取当前启用的行情源，计算展示价格和系统预估日内区间，评估已启用的提醒规则，并在规则触发时通过 SMTP 发送邮件。
 
-The current frontend predicted range calculation in `frontend/src/utils/dayRange.js` should be ported to a backend service, then returned from `/api/market/snapshot` as `predicted_range`. The frontend should render that backend value instead of computing its own independent range. This prevents the screen and email engine from disagreeing.
+当前前端 `frontend/src/utils/dayRange.js` 中的预估高低点计算逻辑应迁移到后端服务，并通过 `/api/market/snapshot` 返回 `predicted_range`。前端改为直接渲染后端返回的预估区间，不再单独计算一套结果。这样可以保证页面展示和邮件引擎使用同一个判断依据。
 
-Recommended backend units:
+建议新增的后端模块：
 
-- `backend/app/services/predicted_range.py`: builds today range and predicted daily range from candles, current price, and source-provided day range.
-- `backend/app/services/alerts.py`: stores alert rules and alert state, evaluates trigger conditions, and produces notification events.
-- `backend/app/services/email_sender.py`: sends email using SMTP configuration and logs delivery failures.
-- `backend/app/alert_worker.py` or a FastAPI lifespan task: runs alert checks at the configured interval.
+- `backend/app/services/predicted_range.py`：根据 K 线、当前价和行情源提供的日内区间，计算今日区间和系统预估日内区间。
+- `backend/app/services/alerts.py`：保存提醒规则和提醒状态，评估触发条件，并生成通知事件。
+- `backend/app/services/email_sender.py`：根据 SMTP 配置发送邮件，并记录发送失败日志。
+- `backend/app/alert_worker.py` 或 FastAPI lifespan 任务：按配置间隔运行提醒检查。
 
-## Configuration
+## 配置
 
-Add an `alerts` section to `config.yaml`:
+在 `config.yaml` 中新增 `alerts` 配置：
 
 ```yaml
 alerts:
@@ -48,13 +48,13 @@ alerts:
     use_tls_env: "ALERT_SMTP_USE_TLS"
 ```
 
-SMTP secrets stay in environment variables and Docker environment wiring, not in `config.yaml`.
+SMTP 密钥和邮箱密码只放在环境变量里，并在 Docker 环境变量中透传，不写入 `config.yaml`。
 
-## Alert Rule Model
+## 提醒规则模型
 
-Store rules and state in SQLite under the configured `storage_path`, matching the existing lightweight local storage style used for K-lines.
+规则和状态保存到 SQLite，路径使用 `alerts.storage_path`。这与项目现有 K 线 SQLite 存储方式保持一致，适合当前单用户场景。
 
-Rule fields:
+规则字段：
 
 - `id`
 - `enabled`
@@ -69,7 +69,7 @@ Rule fields:
 - `created_at`
 - `updated_at`
 
-State fields:
+状态字段：
 
 - `rule_id`
 - `source`
@@ -82,65 +82,65 @@ State fields:
 - `last_predicted_low_value`
 - `last_alerted_at`
 
-The `last_predicted_high_value` and `last_predicted_low_value` fields record the predicted boundary involved in the most recent evaluation, while `last_predicted_*_alert_price` records the price level that last generated an email. Predicted-boundary state is scoped by `source` and `alert_date` in Asia/Shanghai. A new date or source starts a fresh first-touch cycle.
+`last_predicted_high_value` 和 `last_predicted_low_value` 记录最近一次评估时关联的系统预估边界；`last_predicted_*_alert_price` 记录最近一次真正触发邮件的价格。预估边界提醒状态按行情源和 Asia/Shanghai 日期隔离。换行情源或进入新的一天时，重新开始首次触达判断。
 
-## Trigger Rules
+## 触发规则
 
-All comparisons use display prices in `CNY/g`, because the dashboard shows and the user thinks in that unit.
+所有比较都使用展示价格 `CNY/g`，因为仪表盘展示和用户理解的单位都是元/克。
 
-### Custom Target Alerts
+### 自定义目标价提醒
 
-If `notify_on_custom_high` is enabled and `current_price >= target_high_price`, send a custom high email once for that target crossing. If the user edits the target price, reset the corresponding custom alert state.
+如果启用 `notify_on_custom_high`，且 `current_price >= target_high_price`，则发送一次自定义高价提醒邮件。用户修改目标高价后，重置对应的自定义高价提醒状态。
 
-If `notify_on_custom_low` is enabled and `current_price <= target_low_price`, send a custom low email once for that target crossing. If the user edits the target price, reset the corresponding custom alert state.
+如果启用 `notify_on_custom_low`，且 `current_price <= target_low_price`，则发送一次自定义低价提醒邮件。用户修改目标低价后，重置对应的自定义低价提醒状态。
 
-### Predicted High Alerts
+### 预估高点提醒
 
-If `notify_on_predicted_high` is enabled and `current_price >= predicted_range.high`:
+如果启用 `notify_on_predicted_high`，且 `current_price >= predicted_range.high`：
 
-1. If `last_predicted_high_alert_price` is empty, send the first predicted high touch email immediately.
-2. Otherwise, send another email only when `current_price >= last_predicted_high_alert_price + predicted_breakout_step_cny_g`.
-3. After sending, set `last_predicted_high_alert_price` to the current price and store the current `predicted_range.high`.
+1. 如果 `last_predicted_high_alert_price` 为空，说明这是当日/当前行情源第一次触达预估高点，立即发送邮件。
+2. 如果已经发送过高点提醒，则只有在 `current_price >= last_predicted_high_alert_price + predicted_breakout_step_cny_g` 时再次发送邮件。
+3. 发送后，将 `last_predicted_high_alert_price` 更新为当前价格，并保存当前 `predicted_range.high`。
 
-Example with predicted high `890 CNY/g` and step `2 CNY/g`:
+示例：系统预估高点为 `890 CNY/g`，突破阶梯为 `2 CNY/g`。
 
-- `890`: send first touch email.
-- `891`: no email.
-- `892`: send breakout email.
-- `893`: no email.
-- `894`: send breakout email.
+- `890`：第一次触达，发送邮件。
+- `891`：不发送。
+- `892`：相比上次提醒价再涨 `2 CNY/g`，发送邮件。
+- `893`：不发送。
+- `894`：再次达到新阶梯，发送邮件。
 
-### Predicted Low Alerts
+### 预估低点提醒
 
-If `notify_on_predicted_low` is enabled and `current_price <= predicted_range.low`:
+如果启用 `notify_on_predicted_low`，且 `current_price <= predicted_range.low`：
 
-1. If `last_predicted_low_alert_price` is empty, send the first predicted low touch email immediately.
-2. Otherwise, send another email only when `current_price <= last_predicted_low_alert_price - predicted_breakout_step_cny_g`.
-3. After sending, set `last_predicted_low_alert_price` to the current price and store the current `predicted_range.low`.
+1. 如果 `last_predicted_low_alert_price` 为空，说明这是当日/当前行情源第一次触达预估低点，立即发送邮件。
+2. 如果已经发送过低点提醒，则只有在 `current_price <= last_predicted_low_alert_price - predicted_breakout_step_cny_g` 时再次发送邮件。
+3. 发送后，将 `last_predicted_low_alert_price` 更新为当前价格，并保存当前 `predicted_range.low`。
 
-Example with predicted low `880 CNY/g` and step `2 CNY/g`:
+示例：系统预估低点为 `880 CNY/g`，突破阶梯为 `2 CNY/g`。
 
-- `880`: send first touch email.
-- `879`: no email.
-- `878`: send breakout email.
-- `877`: no email.
-- `876`: send breakout email.
+- `880`：第一次触达，发送邮件。
+- `879`：不发送。
+- `878`：相比上次提醒价再跌 `2 CNY/g`，发送邮件。
+- `877`：不发送。
+- `876`：再次达到新阶梯，发送邮件。
 
-There is no time-based cooldown for predicted boundary alerts. Duplicate protection is based only on the `2 CNY/g` price step.
+预估边界提醒不设置时间冷却。去重只依赖 `2 CNY/g` 的价格阶梯。
 
-There is no separate "predicted range updated" email. A changed predicted high or low only matters when the current price reaches that latest boundary or extends another `2 CNY/g` beyond the last notified price.
+不再设计单独的“预估区间更新邮件”。系统预估高点或低点变化本身不直接发邮件，只有当前价格触达最新预估边界，或在上次提醒价基础上继续突破 `2 CNY/g` 时才发邮件。
 
-## API Design
+## API 设计
 
-Add authenticated endpoints under the existing bearer-token API:
+在现有 bearer token 保护下新增接口：
 
-- `GET /api/alerts/rules`: list alert rules and current state summary.
-- `POST /api/alerts/rules`: create a rule.
-- `PUT /api/alerts/rules/{id}`: update a rule and reset affected state when thresholds change.
-- `DELETE /api/alerts/rules/{id}`: delete a rule.
-- `POST /api/alerts/test-email`: send a test email using the configured SMTP settings.
+- `GET /api/alerts/rules`：列出提醒规则和当前状态摘要。
+- `POST /api/alerts/rules`：创建提醒规则。
+- `PUT /api/alerts/rules/{id}`：更新提醒规则；阈值变化时重置对应状态。
+- `DELETE /api/alerts/rules/{id}`：删除提醒规则。
+- `POST /api/alerts/test-email`：使用当前 SMTP 配置发送测试邮件。
 
-Extend `GET /api/market/snapshot` with:
+扩展 `GET /api/market/snapshot` 返回：
 
 ```json
 {
@@ -153,64 +153,62 @@ Extend `GET /api/market/snapshot` with:
 }
 ```
 
-## Frontend Design
+## 前端设计
 
-Add a compact alert settings panel to the dashboard rather than a separate marketing-like page. It should support:
+在现有仪表盘中新增一个紧凑的提醒设置面板，不单独做营销式页面。面板支持：
 
-- Recipient email input.
-- Source selector using the existing public source options.
-- Custom high and low target inputs.
-- Toggles for custom high, custom low, predicted high, and predicted low alerts.
-- Save, disable, delete, and test email actions.
-- A small status line showing whether SMTP is configured and when the last alert was sent.
+- 收件邮箱输入。
+- 行情源选择，复用现有公开行情源选项。
+- 自定义高价、低价输入。
+- 自定义高价、自定义低价、预估高点、预估低点四个开关。
+- 保存、停用、删除、发送测试邮件操作。
+- 小型状态提示，展示 SMTP 是否已配置，以及最近一次提醒发送时间。
 
-The existing price card should continue to show predicted high and low, but it should read from `snapshot.predicted_range` once the backend owns the calculation.
+现有价格卡片继续展示预估高点和低点，但在后端接管计算后，应读取 `snapshot.predicted_range`。
 
-## Email Content
+## 邮件内容
 
-Each alert email should include:
+每封提醒邮件包含：
 
-- Alert type, such as custom high, custom low, predicted high touch, predicted high breakout, predicted low touch, or predicted low breakout.
-- Current display price and unit.
-- Price source label.
-- Predicted high and low when available.
-- Custom target price when relevant.
-- Event time in Asia/Shanghai.
-- A short risk disclaimer that data is for reference only and not investment advice.
+- 提醒类型，例如自定义高价、自定义低价、预估高点首次触达、预估高点继续突破、预估低点首次触达、预估低点继续突破。
+- 当前展示价格和单位。
+- 行情源名称。
+- 可用时展示系统预估高点和低点。
+- 自定义提醒触发时展示目标价。
+- Asia/Shanghai 时间。
+- 简短风险提示：数据仅供参考，不构成投资建议。
 
-## Error Handling
+## 错误处理
 
-- If SMTP is not configured, alert rules may still be saved, but sending test email and runtime delivery should return or log a clear configuration error.
-- If price fetching fails during an alert worker tick, log the failure and retry on the next interval.
-- If one rule fails to send email, continue evaluating other enabled rules.
-- If predicted range cannot be computed, skip predicted-boundary rules for that tick but still evaluate custom target rules.
+- SMTP 未配置时，仍允许保存提醒规则，但测试邮件接口和运行时发送应返回或记录明确的配置错误。
+- 提醒 worker 某次价格获取失败时，记录日志，并在下一轮检查时重试。
+- 某一条规则邮件发送失败时，继续评估其他已启用规则。
+- 如果无法计算预估区间，则该轮跳过预估边界提醒，但仍继续评估自定义目标价提醒。
 
-## Testing
+## 测试
 
-Backend tests should cover:
+后端测试覆盖：
 
-- Predicted range calculation parity with existing frontend examples.
-- Custom high and custom low trigger behavior.
-- First predicted high/low touch sends immediately.
-- Predicted high sends again only after each additional `2 CNY/g` rise from the last high alert price.
-- Predicted low sends again only after each additional `2 CNY/g` fall from the last low alert price.
-- No time cooldown is applied to predicted boundary alerts.
-- SMTP send is mocked and delivery failures do not crash the worker.
+- 预估区间计算与现有前端示例保持一致。
+- 自定义高价和低价触发行为。
+- 第一次触达预估高点/低点时立即发送。
+- 预估高点只在相比上次高点提醒价每再涨 `2 CNY/g` 时继续发送。
+- 预估低点只在相比上次低点提醒价每再跌 `2 CNY/g` 时继续发送。
+- 预估边界提醒不使用时间冷却。
+- SMTP 发送使用 mock，发送失败不导致 worker 崩溃。
 
-Frontend tests should cover:
+前端测试覆盖：
 
-- Rendering the alert settings panel.
-- Saving an alert rule through the API.
-- Showing backend-provided `predicted_range`.
-- Sending a test email action and surfacing success or failure.
+- 提醒设置面板渲染。
+- 通过 API 保存提醒规则。
+- 页面展示后端返回的 `predicted_range`。
+- 测试邮件操作能展示成功或失败状态。
 
-## Rollout
+## 实施顺序
 
-Implement in this order:
-
-1. Move predicted range calculation to backend and expose it in snapshot.
-2. Add alert rule/state storage and pure trigger evaluation tests.
-3. Add SMTP email sender and test-email endpoint.
-4. Add background worker.
-5. Add frontend alert settings panel.
-6. Update docs, Docker environment examples, and tests.
+1. 将预估区间计算迁移到后端，并在 snapshot 中返回。
+2. 新增提醒规则/状态存储，以及纯触发逻辑测试。
+3. 新增 SMTP 邮件发送器和测试邮件接口。
+4. 新增后台提醒 worker。
+5. 新增前端提醒设置面板。
+6. 更新文档、Docker 环境变量示例和测试。
