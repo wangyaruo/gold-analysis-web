@@ -556,6 +556,30 @@ select {
   flex-wrap: wrap;
 }
 
+.chart-reset-button {
+  display: inline-grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--gold-deep);
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.chart-reset-button:hover:not(:disabled) {
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.chart-reset-button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
 .select-pill {
   display: inline-flex;
   align-items: center;
@@ -1358,6 +1382,12 @@ select {
 
 .dashboard-screen .chart-actions {
   gap: 6px;
+}
+
+.dashboard-screen .chart-reset-button {
+  width: 25px;
+  height: 25px;
+  border-radius: 7px;
 }
 
 .dashboard-screen .period-tabs {
