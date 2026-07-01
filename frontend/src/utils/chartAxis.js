@@ -108,8 +108,16 @@ function timeLabel(d) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+function timeLabelWithSeconds(d) {
+  return `${timeLabel(d)}:${pad(d.getSeconds())}`
+}
+
 function localIsoMinute(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${timeLabel(d)}:00.000`
+}
+
+function localIsoSecond(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${timeLabelWithSeconds(d)}.000`
 }
 
 function chineseDateLabel(d) {
@@ -665,6 +673,49 @@ export function buildIntradayTimeline(data, options = {}) {
   }
 }
 
+function normalizeRealtimeSample(sample) {
+  const time = parseTime(sample?.time || sample?.timestamp)
+  const price = finiteNumberOrNull(sample?.price ?? sample?.display_price ?? sample?.close ?? sample?.value)
+  if (!time || price == null) return null
+  return { time, price }
+}
+
+function decorateRealtimeSample(row, sourceKey, time) {
+  if (!isZheshangSource(sourceKey)) return row
+  const dayStart = startOfDate(time)
+  return decorateNaturalDayRow(row, `zheshang_day:${dateKey(dayStart)}`, dayStart)
+}
+
+export function mergeRealtimeSamplesIntoTimeline(data, samples = [], options = {}) {
+  if (!Array.isArray(samples) || !samples.length) return data
+  const { sourceKey = '' } = normalizeIntradayOptions(options)
+  const rowByTime = new Map((Array.isArray(data) ? data : []).map((item) => [item.time, item]))
+
+  samples.forEach((sample) => {
+    const normalized = normalizeRealtimeSample(sample)
+    if (!normalized || !isIntradayTradingTime(normalized.time, sourceKey)) return
+    const time = localIsoSecond(normalized.time)
+    const existing = rowByTime.get(time)
+    const price = normalized.price
+    const row = {
+      ...(existing || {}),
+      time,
+      open: finiteNumberOrNull(existing?.open) ?? price,
+      high: Math.max(finiteNumberOrNull(existing?.high) ?? price, price),
+      low: Math.min(finiteNumberOrNull(existing?.low) ?? price, price),
+      close: price,
+      isRealtimeSample: true,
+    }
+    rowByTime.set(time, decorateRealtimeSample(row, sourceKey, normalized.time))
+  })
+
+  return Array.from(rowByTime.values()).sort((a, b) => {
+    const left = parseTime(a.time)
+    const right = parseTime(b.time)
+    return Number(left || 0) - Number(right || 0)
+  })
+}
+
 export function buildIntradayViewportRange(data, options = {}) {
   const { sourceKey = '' } = normalizeIntradayOptions(options)
   const n = data.length
@@ -717,6 +768,37 @@ export function buildIntradayLineSegments(data) {
 
   pushCurrent()
   return segments
+}
+
+export function findNearestFiniteClose(data, index) {
+  if (!Array.isArray(data) || !data.length) return null
+  const start = clampIndex(index, data.length - 1)
+  for (let distance = 0; distance < data.length; distance += 1) {
+    const leftIndex = start - distance
+    if (leftIndex >= 0) {
+      const left = finiteNumberOrNull(data[leftIndex]?.close)
+      if (left != null) return { index: leftIndex, value: left }
+    }
+    const rightIndex = start + distance
+    if (rightIndex !== leftIndex && rightIndex < data.length) {
+      const right = finiteNumberOrNull(data[rightIndex]?.close)
+      if (right != null) return { index: rightIndex, value: right }
+    }
+  }
+  return null
+}
+
+export function buildLineTooltipHtml({ label, value, unit = 'CNY/g', decimals = 3, nearest = null } = {}) {
+  const price = finiteNumberOrNull(value)
+  const header = `<div style="font-weight:600;margin-bottom:3px">${label || ''}</div>`
+  if (price != null) {
+    return `${header}<div>价格 <b>${price.toFixed(decimals)}</b> ${unit}</div>`
+  }
+  const nearestPrice = finiteNumberOrNull(nearest?.value)
+  const nearestLine = nearestPrice == null
+    ? ''
+    : `<div style="color:#9b8b63;margin-top:2px">最近价格 <b>${nearestPrice.toFixed(decimals)}</b> ${unit}</div>`
+  return `${header}<div>该时间无交易数据</div>${nearestLine}`
 }
 
 function fallbackVisibleTicks(data, period, startIndex, endIndex) {
@@ -829,7 +911,8 @@ export function formatFullTime(raw, period) {
   if (!d) return raw ? String(raw) : ''
   if (period === '1month') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   if (period === '1day') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${timeLabel(d)}`
+  const label = period === '1min' && d.getSeconds() !== 0 ? timeLabelWithSeconds(d) : timeLabel(d)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${label}`
 }
 
 export function formatDataZoomLabel(raw, period) {

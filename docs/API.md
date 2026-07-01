@@ -29,6 +29,7 @@ Authorization: Bearer change-me-local-token
 - `data_sources`: 前端可切换的数据源列表，包含 `active`、`fallback` 和 `options`。
 - `indicator_defaults`: 指标默认参数。
 - `decision_rule_defaults`: 推荐规则阈值。
+- `alerts`: 前端可读取的提醒配置摘要，包含是否启用 worker、预估突破阶梯、默认行情源和 SMTP 是否已配置。
 
 ## GET /api/market/snapshot
 
@@ -88,9 +89,17 @@ Authorization: Bearer change-me-local-token
     "confidence": 1,
     "reasons": [],
     "risks": []
+  },
+  "predicted_range": {
+    "low": 878.12,
+    "high": 895.68,
+    "range_percent": 0.02,
+    "unit": "CNY/g"
   }
 }
 ```
+
+`predicted_range` 是后端统一计算的系统预估日内区间。前端展示和邮件提醒判断都使用该字段。
 
 ## GET /api/market/monthly-reviews
 
@@ -167,4 +176,106 @@ Authorization: Bearer change-me-local-token
   "amount": 120,
   "percent": 2.608696
 }
+```
+
+## GET /api/alerts/rules
+
+返回已保存的邮件提醒规则。
+
+响应：
+
+```json
+{
+  "rules": [
+    {
+      "id": 1,
+      "enabled": true,
+      "source": "icbc",
+      "recipient_email": "me@example.com",
+      "target_high_price": 900,
+      "target_low_price": 870,
+      "notify_on_custom_high": true,
+      "notify_on_custom_low": true,
+      "notify_on_predicted_high": true,
+      "notify_on_predicted_low": true,
+      "state": {
+        "alert_date": "2026-07-01",
+        "last_predicted_high_alert_price": 890
+      }
+    }
+  ],
+  "smtp_configured": true
+}
+```
+
+## POST /api/alerts/rules
+
+创建邮件提醒规则。
+
+请求：
+
+```json
+{
+  "enabled": true,
+  "source": "icbc",
+  "recipient_email": "me@example.com",
+  "target_high_price": 900,
+  "target_low_price": 870,
+  "notify_on_custom_high": true,
+  "notify_on_custom_low": true,
+  "notify_on_predicted_high": true,
+  "notify_on_predicted_low": true
+}
+```
+
+响应：
+
+```json
+{
+  "rule": {
+    "id": 1,
+    "enabled": true,
+    "source": "icbc",
+    "recipient_email": "me@example.com"
+  }
+}
+```
+
+## PUT /api/alerts/rules/{id}
+
+更新邮件提醒规则。修改 `target_high_price` 或 `target_low_price` 时，后端会重置对应自定义目标价的触发状态。
+
+## DELETE /api/alerts/rules/{id}
+
+删除邮件提醒规则及其状态。
+
+响应：
+
+```json
+{"deleted": true}
+```
+
+## POST /api/alerts/test-email
+
+使用当前 SMTP 环境变量发送测试邮件。
+
+请求：
+
+```json
+{
+  "recipient_email": "me@example.com",
+  "source_label": "工商银行积存金",
+  "current_price": 890,
+  "display_unit": "CNY/g",
+  "predicted_range": {
+    "low": 880,
+    "high": 890
+  }
+}
+```
+
+响应：
+
+```json
+{"sent": true}
 ```

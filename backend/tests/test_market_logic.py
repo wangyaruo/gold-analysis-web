@@ -1,20 +1,36 @@
 import unittest
 import ssl
+import smtplib
 import asyncio
 import logging
 import tempfile
 from datetime import datetime, timedelta, timezone
+from email.utils import parseaddr
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+import backend.app.api as api_module
 from backend.app.core import logging as app_logging
 from backend.app.core.config import load_config
+from backend.app.main import app
 from backend.app.services.decision import TechnicalSignal, build_recommendation
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
 from backend.app.services.indicators import compute_ema, compute_sma, compute_stop_loss
 from backend.app.services.pnl import calculate_pnl
+from backend.app.services.predicted_range import build_predicted_daily_range, build_today_range
 from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import PriceTick, validate_price_tick
+from backend.app.services.alerts import AlertRule, AlertState, AlertStore, evaluate_alert_rule
+from backend.app.services.email_sender import (
+    EmailConfig,
+    EmailConfigError,
+    EmailSendError,
+    build_alert_email_message,
+    build_email_config,
+    send_email,
+)
 from backend.app.api import (
     _capture_kline_tick_for_source,
     _convert_price_for_display,
@@ -68,6 +84,12 @@ class LoggingTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_alert_worker_is_enabled_by_default_with_two_second_interval(self):
+        config = load_config()
+
+        self.assertTrue(config["alerts"]["enabled"])
+        self.assertEqual(config["alerts"]["check_interval_seconds"], 2)
+
     def test_hongyun_gold_reference_source_is_publicly_available(self):
         config = load_config()
 
@@ -145,6 +167,450 @@ class DisplayPriceTests(unittest.TestCase):
         )
 
         self.assertEqual(result, 900)
+
+
+class PredictedRangeTests(unittest.TestCase):
+    def test_predicted_daily_range_centers_on_current_price_without_candles(self):
+        result = build_predicted_daily_range(885.53, range_percent=0.02)
+
+        self.assertEqual(result["low"], 876.76)
+        self.assertEqual(result["high"], 894.3)
+        self.assertEqual(result["range_percent"], 0.02)
+
+    def test_predicted_daily_range_includes_observed_high_or_low(self):
+        now = datetime(2026, 6, 29, 12, 0)
+        candles = [
+            {"time": "2026-06-28T23:58:00", "open": 200, "high": 210, "low": 190, "close": 205},
+            {"time": "2026-06-29T09:30:00", "open": 550, "high": 552, "low": 549, "close": 551},
+            {"time": "2026-06-29T09:31:00", "open": 551, "high": 553, "low": 550, "close": 552},
+        ]
+
+        self.assertEqual(
+            build_predicted_daily_range(580, range_percent=0.02, candles=candles, now=now),
+            {"low": 545.02, "high": 580, "range_percent": 0.02},
+        )
+        self.assertEqual(
+            build_predicted_daily_range(520, range_percent=0.02, candles=candles, now=now),
+            {"low": 520, "high": 555.92, "range_percent": 0.02},
+        )
+
+    def test_today_range_prefers_source_range_and_current_price(self):
+        result = build_today_range([], 882.2, source_range={"low": 865.39, "high": 881.56})
+
+        self.assertEqual(result, {"low": 865.39, "high": 882.2})
+
+
+class AlertRuleTests(unittest.TestCase):
+    def test_predicted_high_first_touch_then_two_yuan_steps(self):
+        rule = AlertRule(
+            id=1,
+            source="icbc",
+            recipient_email="me@example.com",
+            notify_on_predicted_high=True,
+        )
+        state = AlertState(rule_id=1, source="icbc", alert_date="2026-07-01")
+
+        first = evaluate_alert_rule(
+            rule,
+            state,
+            current_price=890,
+            predicted_range={"high": 890, "low": 880},
+            step=2,
+        )
+        second = evaluate_alert_rule(
+            rule,
+            first.state,
+            current_price=891,
+            predicted_range={"high": 890, "low": 880},
+            step=2,
+        )
+        third = evaluate_alert_rule(
+            rule,
+            second.state,
+            current_price=892,
+            predicted_range={"high": 890, "low": 880},
+            step=2,
+        )
+
+        self.assertEqual([event.kind for event in first.events], ["predicted_high_touch"])
+        self.assertEqual(second.events, [])
+        self.assertEqual([event.kind for event in third.events], ["predicted_high_breakout"])
+        self.assertEqual(third.state.last_predicted_high_alert_price, 892)
+
+    def test_predicted_low_first_touch_then_two_yuan_steps(self):
+        rule = AlertRule(
+            id=1,
+            source="icbc",
+            recipient_email="me@example.com",
+            notify_on_predicted_low=True,
+        )
+        state = AlertState(rule_id=1, source="icbc", alert_date="2026-07-01")
+
+        first = evaluate_alert_rule(
+            rule,
+            state,
+            current_price=880,
+            predicted_range={"high": 890, "low": 880},
+            step=2,
+        )
+        second = evaluate_alert_rule(
+            rule,
+            first.state,
+            current_price=879,
+            predicted_range={"high": 890, "low": 880},
+            step=2,
+        )
+        third = evaluate_alert_rule(
+            rule,
+            second.state,
+            current_price=878,
+            predicted_range={"high": 890, "low": 880},
+            step=2,
+        )
+
+        self.assertEqual([event.kind for event in first.events], ["predicted_low_touch"])
+        self.assertEqual(second.events, [])
+        self.assertEqual([event.kind for event in third.events], ["predicted_low_breakout"])
+        self.assertEqual(third.state.last_predicted_low_alert_price, 878)
+
+    def test_custom_target_alerts_fire_once_until_state_is_reset(self):
+        rule = AlertRule(
+            id=2,
+            source="icbc",
+            recipient_email="me@example.com",
+            target_high_price=900,
+            target_low_price=870,
+            notify_on_custom_high=True,
+            notify_on_custom_low=True,
+        )
+        state = AlertState(rule_id=2, source="icbc", alert_date="2026-07-01")
+
+        high = evaluate_alert_rule(rule, state, current_price=901, predicted_range=None, step=2)
+        repeated_high = evaluate_alert_rule(rule, high.state, current_price=902, predicted_range=None, step=2)
+        low = evaluate_alert_rule(rule, repeated_high.state, current_price=869, predicted_range=None, step=2)
+
+        self.assertEqual([event.kind for event in high.events], ["custom_high"])
+        self.assertEqual(repeated_high.events, [])
+        self.assertEqual([event.kind for event in low.events], ["custom_low"])
+
+    def test_custom_target_alerts_fire_when_price_crosses_threshold(self):
+        rule = AlertRule(
+            id=3,
+            source="icbc",
+            recipient_email="me@example.com",
+            target_high_price=870.10,
+            target_low_price=870.10,
+            notify_on_custom_high=True,
+            notify_on_custom_low=True,
+        )
+        state = AlertState(rule_id=3, source="icbc", alert_date="2026-07-01")
+
+        high = evaluate_alert_rule(rule, state, current_price=870.11, predicted_range=None, step=2)
+        low = evaluate_alert_rule(rule, state, current_price=870.09, predicted_range=None, step=2)
+
+        self.assertEqual([event.kind for event in high.events], ["custom_high"])
+        self.assertEqual(high.events[0].target_price, 870.10)
+        self.assertEqual([event.kind for event in low.events], ["custom_low"])
+        self.assertEqual(low.events[0].target_price, 870.10)
+
+    def test_alert_store_persists_rule_and_date_scoped_state(self):
+        store = AlertStore(":memory:")
+        rule = store.create_rule({
+            "source": "icbc",
+            "recipient_email": "me@example.com",
+            "notify_on_predicted_high": True,
+        })
+        state = AlertState(
+            rule_id=rule.id,
+            source="icbc",
+            alert_date="2026-07-01",
+            last_predicted_high_alert_price=890,
+        )
+
+        store.save_state(state)
+
+        self.assertEqual(store.list_rules()[0].recipient_email, "me@example.com")
+        self.assertEqual(
+            store.get_state(rule.id, "icbc", "2026-07-01").last_predicted_high_alert_price,
+            890,
+        )
+        self.assertIsNone(store.get_state(rule.id, "icbc", "2026-07-02").last_predicted_high_alert_price)
+        store.close()
+
+
+class EmailSenderTests(unittest.TestCase):
+    def test_email_config_requires_smtp_host(self):
+        with self.assertRaises(EmailConfigError):
+            build_email_config({"smtp_host_env": "MISSING_SMTP_HOST"}, environ={})
+
+    def test_email_config_reads_environment(self):
+        config = build_email_config(
+            {
+                "smtp_host_env": "SMTP_HOST",
+                "smtp_port_env": "SMTP_PORT",
+                "smtp_username_env": "SMTP_USER",
+                "smtp_password_env": "SMTP_PASSWORD",
+                "from_email_env": "FROM_EMAIL",
+                "envelope_from_email_env": "ENVELOPE_FROM_EMAIL",
+                "use_tls_env": "SMTP_TLS",
+                "use_ssl_env": "SMTP_SSL",
+            },
+            environ={
+                "SMTP_HOST": "smtp.example.test",
+                "SMTP_PORT": "465",
+                "SMTP_USER": "gold",
+                "SMTP_PASSWORD": "secret",
+                "FROM_EMAIL": "alerts@example.test",
+                "ENVELOPE_FROM_EMAIL": "bounce@example.test",
+                "SMTP_TLS": "false",
+                "SMTP_SSL": "true",
+            },
+        )
+
+        self.assertEqual(config.host, "smtp.example.test")
+        self.assertEqual(config.port, 465)
+        self.assertEqual(config.username, "gold")
+        self.assertEqual(config.password, "secret")
+        self.assertEqual(config.from_email, "alerts@example.test")
+        self.assertEqual(config.envelope_from_email, "bounce@example.test")
+        self.assertFalse(config.use_tls)
+        self.assertTrue(config.use_ssl)
+
+    def test_send_email_uses_ssl_and_envelope_sender(self):
+        calls = []
+
+        class FakeSMTP:
+            def __init__(self, host, port, timeout=None, context=None):
+                calls.append(("connect", host, port, timeout, context is not None))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def login(self, username, password):
+                calls.append(("login", username, password))
+
+            def send_message(self, message, from_addr=None, to_addrs=None):
+                calls.append(("send_message", message["From"], from_addr, to_addrs))
+
+        message = build_alert_email_message(
+            recipient_email="me@example.com",
+            from_email="alerts@example.test",
+            alert_kind="test",
+            source_label="测试",
+            current_price=890.0,
+            display_unit="CNY/g",
+            predicted_range=None,
+            target_price=None,
+            event_time="2026-07-01 12:00:00",
+            rule_id=None,
+        )
+        config = build_email_config(
+            {},
+            environ={
+                "ALERT_SMTP_HOST": "smtp.example.test",
+                "ALERT_SMTP_PORT": "465",
+                "ALERT_SMTP_USERNAME": "gold",
+                "ALERT_SMTP_PASSWORD": "secret",
+                "ALERT_FROM_EMAIL": "alerts@example.test",
+                "ALERT_ENVELOPE_FROM_EMAIL": "bounce@example.test",
+                "ALERT_SMTP_USE_SSL": "true",
+            },
+        )
+
+        with patch("backend.app.services.email_sender.smtplib.SMTP_SSL", FakeSMTP):
+            send_email(config, message)
+
+        self.assertEqual(calls[0][0:4], ("connect", "smtp.example.test", 465, 10))
+        self.assertEqual(calls[1], ("login", "gold", "secret"))
+        self.assertEqual(
+            calls[2],
+            ("send_message", "黄金价格-波动通知 <alerts@example.test>", "bounce@example.test", None),
+        )
+
+    def test_send_email_explains_smtp_disconnect_in_chinese(self):
+        class DisconnectingSMTP:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def starttls(self):
+                pass
+
+            def login(self, username, password):
+                pass
+
+            def send_message(self, message, from_addr=None, to_addrs=None):
+                raise smtplib.SMTPServerDisconnected("Connection unexpectedly closed")
+
+        message = build_alert_email_message(
+            recipient_email="me@example.com",
+            from_email="alerts@example.test",
+            alert_kind="test",
+            source_label="测试",
+            current_price=890.0,
+            display_unit="CNY/g",
+            predicted_range=None,
+            target_price=None,
+            event_time="2026-07-01 12:00:00",
+            rule_id=None,
+        )
+        config = build_email_config(
+            {},
+            environ={
+                "ALERT_SMTP_HOST": "smtp.example.test",
+                "ALERT_SMTP_USERNAME": "gold",
+                "ALERT_SMTP_PASSWORD": "secret",
+                "ALERT_FROM_EMAIL": "alerts@example.test",
+            },
+        )
+
+        with patch("backend.app.services.email_sender.smtplib.SMTP", DisconnectingSMTP):
+            with self.assertRaises(EmailSendError) as ctx:
+                send_email(config, message)
+
+        self.assertIn("SMTP服务器已登录，但发信阶段被服务商断开", str(ctx.exception))
+
+    def test_alert_email_message_contains_price_context(self):
+        event = AlertRule(
+            id=5,
+            source="icbc",
+            recipient_email="me@example.com",
+        )
+        message = build_alert_email_message(
+            recipient_email="me@example.com",
+            from_email="alerts@example.test",
+            alert_kind="predicted_high_touch",
+            source_label="工商银行积存金",
+            current_price=890.0,
+            display_unit="CNY/g",
+            predicted_range={"high": 890.0, "low": 880.0},
+            target_price=None,
+            event_time="2026-07-01 12:00:00",
+            rule_id=event.id,
+        )
+
+        self.assertEqual(message["To"], "me@example.com")
+        body = message.get_content()
+        self.assertIn("预估高点首次触达", body)
+        self.assertIn("890.00 CNY/g", body)
+        self.assertIn("工商银行积存金", body)
+
+    def test_alert_email_message_uses_clearance_and_bottom_fishing_labels(self):
+        high_message = build_alert_email_message(
+            recipient_email="me@example.com",
+            from_email="alerts@example.test",
+            alert_kind="custom_high",
+            source_label="工商银行积存金",
+            current_price=870.11,
+            display_unit="CNY/g",
+            predicted_range=None,
+            target_price=870.10,
+            event_time="2026-07-01 12:00:00",
+            rule_id=7,
+        )
+        low_message = build_alert_email_message(
+            recipient_email="me@example.com",
+            from_email="alerts@example.test",
+            alert_kind="custom_low",
+            source_label="工商银行积存金",
+            current_price=870.09,
+            display_unit="CNY/g",
+            predicted_range=None,
+            target_price=870.10,
+            event_time="2026-07-01 12:00:00",
+            rule_id=8,
+        )
+
+        self.assertIn("预设清仓价格提醒", high_message["Subject"])
+        self.assertIn("提醒类型：预设清仓价格提醒", high_message.get_content())
+        self.assertIn("预设抄底价格提醒", low_message["Subject"])
+        self.assertIn("提醒类型：预设抄底价格提醒", low_message.get_content())
+
+    def test_alert_email_message_uses_notification_sender_name(self):
+        message = build_alert_email_message(
+            recipient_email="me@example.com",
+            from_email="alerts@example.test",
+            alert_kind="test",
+            source_label="工商银行积存金",
+            current_price=890.0,
+            display_unit="CNY/g",
+            predicted_range=None,
+            target_price=None,
+            event_time="2026-07-01 12:00:00",
+            rule_id=None,
+        )
+
+        display_name, address = parseaddr(str(message["From"]))
+        self.assertEqual(display_name, "黄金价格-波动通知")
+        self.assertEqual(address, "alerts@example.test")
+
+
+class AlertApiTests(unittest.TestCase):
+    def setUp(self):
+        self.store = AlertStore(":memory:")
+        self.previous_store = api_module._alert_store if hasattr(api_module, "_alert_store") else None
+        api_module._alert_store = self.store
+        self.client = TestClient(app)
+        self.headers = {"Authorization": "Bearer change-me-local-token"}
+
+    def tearDown(self):
+        api_module._alert_store = self.previous_store
+        self.store.close()
+
+    def test_alert_rule_api_creates_and_lists_rule(self):
+        response = self.client.post(
+            "/api/alerts/rules",
+            json={
+                "source": "icbc",
+                "recipient_email": "me@example.com",
+                "target_high_price": 900,
+                "notify_on_custom_high": True,
+                "notify_on_predicted_high": True,
+            },
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        created = response.json()["rule"]
+        self.assertEqual(created["recipient_email"], "me@example.com")
+        self.assertEqual(created["target_high_price"], 900.0)
+
+        list_response = self.client.get("/api/alerts/rules", headers=self.headers)
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["rules"][0]["id"], created["id"])
+
+    def test_test_email_api_returns_send_error_detail(self):
+        with (
+            patch.object(
+                api_module,
+                "build_email_config",
+                return_value=EmailConfig(
+                    host="smtp.example.test",
+                    port=587,
+                    username="gold",
+                    password="secret",
+                    from_email="alerts@example.test",
+                ),
+            ),
+            patch.object(api_module, "send_email", side_effect=EmailSendError("SMTP服务器已登录，但发信阶段被服务商断开。")),
+        ):
+            response = self.client.post(
+                "/api/alerts/test-email",
+                json={"recipient_email": "me@example.com"},
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "SMTP服务器已登录，但发信阶段被服务商断开。")
 
 
 class PriceProviderTests(unittest.TestCase):

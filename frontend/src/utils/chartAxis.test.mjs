@@ -8,8 +8,11 @@ import {
   buildIntradayLineSegments,
   buildIntradayTimeline,
   buildIntradayViewportRange,
+  buildLineTooltipHtml,
+  findNearestFiniteClose,
   buildViewportResetKey,
   buildVisibleExtrema,
+  mergeRealtimeSamplesIntoTimeline,
   buildZoomMinValueSpan,
   buildYAxisScale,
   buildYAxisScaleForRange,
@@ -569,3 +572,34 @@ assert.equal(wideIntradayYAxis.interval, 5)
 assert.ok(wideIntradayYAxis.splitNumber <= 8)
 assert.ok(wideIntradayYAxis.min <= 863.05)
 assert.ok(wideIntradayYAxis.max >= 886.69)
+
+const timelineWithRealtimeSamples = mergeRealtimeSamplesIntoTimeline([
+  { time: '2026-07-01T09:10:00.000', open: 866, high: 866, low: 866, close: 866 },
+  { time: '2026-07-01T09:11:00.000', open: null, high: null, low: null, close: null },
+], [
+  { time: '2026-07-01T09:10:02', price: 866.2 },
+  { time: '2026-07-01T09:10:04', price: 866.35 },
+], { sourceKey: 'icbc' })
+assert.deepEqual(timelineWithRealtimeSamples.map((item) => item.time), [
+  '2026-07-01T09:10:00.000',
+  '2026-07-01T09:10:02.000',
+  '2026-07-01T09:10:04.000',
+  '2026-07-01T09:11:00.000',
+])
+assert.equal(timelineWithRealtimeSamples[1].isRealtimeSample, true)
+assert.equal(formatFullTime('2026-07-01T09:10:02.000', '1min'), '2026-07-01 09:10:02')
+
+assert.deepEqual(findNearestFiniteClose(timelineWithRealtimeSamples, 3), {
+  index: 2,
+  value: 866.35,
+})
+assert.equal(
+  buildLineTooltipHtml({
+    label: '2026-07-01 09:11',
+    value: null,
+    unit: 'CNY/g',
+    decimals: 3,
+    nearest: { value: 866.35 },
+  }),
+  '<div style="font-weight:600;margin-bottom:3px">2026-07-01 09:11</div><div>该时间无交易数据</div><div style="color:#9b8b63;margin-top:2px">最近价格 <b>866.350</b> CNY/g</div>',
+)

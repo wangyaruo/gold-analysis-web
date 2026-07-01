@@ -9,9 +9,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend.app.core.auth import require_bearer_token
 from backend.app.core.config import load_config
 from backend.app.core.logging import log_event
+from backend.app.services.alerts import AlertStore, rule_to_dict, state_to_dict
 from backend.app.services.data_provider import MarketDataError, PriceProvider
 from backend.app.services.decision import TechnicalSignal, build_recommendation
 from backend.app.services.display_price import convert_usd_oz_to_cny_g
+from backend.app.services.email_sender import (
+    EmailConfigError,
+    EmailSendError,
+    build_alert_email_message,
+    build_email_config,
+    send_email,
+)
 from backend.app.services.indicators import compute_stop_loss
 from backend.app.services.kline_store import KlineStore
 from backend.app.services.market_math import (
@@ -25,12 +33,14 @@ from backend.app.services.sentiment import analyze_news_sentiment
 from backend.app.services.validation import validate_price_tick
 from backend.app.services.klines import get_klines, supported_periods
 from backend.app.services.monthly_review import build_monthly_review, build_monthly_reviews
+from backend.app.services.predicted_range import build_predicted_daily_range
 
 
 router = APIRouter()
 _config = load_config()
 _provider = PriceProvider(_config)
 _kline_store = KlineStore.from_config(_config)
+_alert_store = AlertStore.from_config(_config)
 
 
 @router.get("/health")
@@ -98,9 +108,18 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
     source_unit = _source_display_unit(source_config, display_config)
     display_prices = _convert_prices_for_display(prices, display_config, source_config)
     display_stop_loss = _convert_price_for_display(stop_loss.stop_loss, display_config, source_config)
-    _kline_store.record_price(source_config.get("_key"), display_prices[-1], validated_tick.timestamp)
-    _schedule_passive_history_capture(config, source_config.get("_key"))
-    today_range = _provider.today_range(source_config.get("_key"))
+    source_key = source_config.get("_key")
+    _kline_store.record_price(source_key, display_prices[-1], validated_tick.timestamp)
+    _schedule_passive_history_capture(config, source_key)
+    today_range = _provider.today_range(source_key)
+    display_today_range = _display_today_range(today_range, display_config, source_config)
+    predicted_range = build_predicted_daily_range(
+        display_prices[-1],
+        range_percent=float(config.get("realtime", {}).get("predicted_range_percent", 0.02)),
+        candles=_kline_store.get_candles(source_key, "1min"),
+        now=validated_tick.timestamp,
+        source_range=display_today_range,
+    )
 
     return {
         "price": {
@@ -113,7 +132,11 @@ async def market_snapshot(source: Optional[str] = None) -> dict[str, Any]:
             "source": validated_tick.source,
             "requested_source": source_config.get("_key"),
         },
-        "today_range": _display_today_range(today_range, display_config, source_config),
+        "today_range": display_today_range,
+        "predicted_range": {
+            **predicted_range,
+            "unit": display_unit,
+        } if predicted_range else None,
         "history": _build_history(prices, display_prices),
         "indicators": {
             "stop_loss": {
@@ -187,6 +210,75 @@ async def portfolio_pnl(payload: dict[str, float]) -> dict[str, float]:
     return result.__dict__
 
 
+@router.get("/alerts/rules", dependencies=[Depends(require_bearer_token)])
+async def list_alert_rules() -> dict[str, Any]:
+    rules = []
+    for rule in _alert_store.list_rules():
+        state = _alert_store.latest_state_for_rule(int(rule.id or 0))
+        rules.append({
+            **rule_to_dict(rule),
+            "state": state_to_dict(state) if state else None,
+        })
+    return {
+        "rules": rules,
+        "smtp_configured": _smtp_configured(load_config()),
+    }
+
+
+@router.post("/alerts/rules", dependencies=[Depends(require_bearer_token)])
+async def create_alert_rule(payload: dict[str, Any]) -> dict[str, Any]:
+    _validate_alert_rule_payload(payload)
+    rule = _alert_store.create_rule(payload)
+    return {"rule": rule_to_dict(rule)}
+
+
+@router.put("/alerts/rules/{rule_id}", dependencies=[Depends(require_bearer_token)])
+async def update_alert_rule(rule_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    _validate_alert_rule_payload(payload, partial=True)
+    rule = _alert_store.update_rule(rule_id, payload)
+    if not rule:
+        raise HTTPException(status_code=404, detail="alert rule not found")
+    return {"rule": rule_to_dict(rule)}
+
+
+@router.delete("/alerts/rules/{rule_id}", dependencies=[Depends(require_bearer_token)])
+async def delete_alert_rule(rule_id: int) -> dict[str, bool]:
+    deleted = _alert_store.delete_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="alert rule not found")
+    return {"deleted": True}
+
+
+@router.post("/alerts/test-email", dependencies=[Depends(require_bearer_token)])
+async def send_test_alert_email(payload: dict[str, Any]) -> dict[str, bool]:
+    recipient = str(payload.get("recipient_email") or "").strip()
+    if not recipient:
+        raise HTTPException(status_code=422, detail="recipient_email is required")
+    config = load_config()
+    try:
+        email_config = build_email_config(config.get("alerts", {}).get("email", {}))
+        message = build_alert_email_message(
+            recipient_email=recipient,
+            from_email=email_config.from_email,
+            alert_kind="test",
+            source_label=str(payload.get("source_label") or "测试行情源"),
+            current_price=float(payload.get("current_price") or 0),
+            display_unit=str(payload.get("display_unit") or "CNY/g"),
+            predicted_range=payload.get("predicted_range"),
+            target_price=None,
+            event_time=str(payload.get("event_time") or "--"),
+            rule_id=None,
+        )
+        send_email(email_config, message)
+    except EmailConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EmailSendError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"test email send failed: {exc}") from exc
+    return {"sent": True}
+
+
 @router.get("/config/public", dependencies=[Depends(require_bearer_token)])
 async def public_config() -> dict[str, Any]:
     config = load_config()
@@ -197,6 +289,7 @@ async def public_config() -> dict[str, Any]:
         "data_sources": _public_data_sources(config),
         "indicator_defaults": config.get("indicators", {}),
         "decision_rule_defaults": config.get("decision_rules", {}),
+        "alerts": _public_alert_config(config),
     }
 
 
@@ -340,3 +433,38 @@ def _public_data_sources(config: dict[str, Any]) -> dict[str, Any]:
         "fallback": sources.get("fallback"),
         "options": options,
     }
+
+
+def _public_alert_config(config: dict[str, Any]) -> dict[str, Any]:
+    alerts = config.get("alerts", {})
+    return {
+        "enabled": bool(alerts.get("enabled", False)),
+        "check_interval_seconds": int(alerts.get("check_interval_seconds", 15)),
+        "predicted_breakout_step_cny_g": float(alerts.get("predicted_breakout_step_cny_g", 2)),
+        "default_source": alerts.get("default_source", config.get("data_sources", {}).get("active", "demo")),
+        "smtp_configured": _smtp_configured(config),
+    }
+
+
+def _smtp_configured(config: dict[str, Any]) -> bool:
+    try:
+        build_email_config(config.get("alerts", {}).get("email", {}))
+        return True
+    except EmailConfigError:
+        return False
+
+
+def _validate_alert_rule_payload(payload: dict[str, Any], *, partial: bool = False) -> None:
+    if not partial or "recipient_email" in payload:
+        recipient = str(payload.get("recipient_email") or "").strip()
+        if not recipient:
+            raise HTTPException(status_code=422, detail="recipient_email is required")
+    for field in ("target_high_price", "target_low_price"):
+        if field not in payload or payload.get(field) in (None, ""):
+            continue
+        try:
+            value = float(payload[field])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=f"{field} must be a number") from exc
+        if value <= 0:
+            raise HTTPException(status_code=422, detail=f"{field} must be positive")

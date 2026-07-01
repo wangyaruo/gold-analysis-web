@@ -1,3 +1,5 @@
+import { formatApiError } from './utils/apiErrors.js'
+
 function resolveApiBaseUrl() {
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL
@@ -30,7 +32,7 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const body = await response.text()
-    throw new Error(`${response.status} ${response.statusText}: ${body}`)
+    throw new Error(formatApiError(response, body))
   }
 
   return response.json()
@@ -76,6 +78,37 @@ export function getPeriods() {
 
 export function calculatePnl(payload) {
   return request('/api/portfolio/pnl', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getAlertRules() {
+  return request('/api/alerts/rules')
+}
+
+export function createAlertRule(payload) {
+  return request('/api/alerts/rules', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateAlertRule(id, payload) {
+  return request(`/api/alerts/rules/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteAlertRule(id) {
+  return request(`/api/alerts/rules/${id}`, {
+    method: 'DELETE',
+  })
+}
+
+export function sendTestEmail(payload) {
+  return request('/api/alerts/test-email', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

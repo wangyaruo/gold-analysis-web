@@ -11,10 +11,13 @@ import {
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   buildAxisLabelLookup,
+  buildLineTooltipHtml,
   buildIntradayLineSegments,
   buildIntradayTimeline,
   buildIntradayViewportRange,
   buildViewportResetKey,
+  findNearestFiniteClose,
+  mergeRealtimeSamplesIntoTimeline,
   buildVisibleExtrema,
   buildYAxisScaleForRange,
   buildZoomMinValueSpan,
@@ -42,6 +45,7 @@ const props = defineProps({
   period: { type: String, default: '1day' },
   sourceKey: { type: String, default: '' },
   resetKey: { type: Number, default: 0 },
+  realtimeTicks: { type: Array, default: () => [] },
 })
 
 // 默认可见窗口(=约10个刻度宽). 月线放宽到 12 条, 避免粗略 30 天数据造成自然月标签重复。
@@ -98,7 +102,9 @@ function buildXAxisLabels(data, startIndex, endIndex) {
 
 const buildOption = () => {
   const timeline = useIntradayProfile.value ? buildIntradayTimeline(bars.value, { sourceKey: props.sourceKey }) : null
-  const data = timeline?.data || bars.value
+  const data = timeline
+    ? mergeRealtimeSamplesIntoTimeline(timeline.data, props.realtimeTicks, { sourceKey: props.sourceKey })
+    : bars.value
   const n = data.length
   const categories = data.map((c) => formatFullTime(c.time, props.period))
   const ohlc = data.map((c) => [c.open, c.close, c.low, c.high])
@@ -151,12 +157,21 @@ const buildOption = () => {
   const tooltipFormatter = (params) => {
     const k = params.find((p) => p.seriesName === 'K线')
     if (!k) {
-      const p0 = params.find((p) => p.seriesName === '收盘') || params[0]
+      const p0 = params.find((p) => p.seriesName === '收盘' && isFinitePrice(p.data))
+        || params.find((p) => p.seriesName === '收盘')
+        || params[0]
       const v = Array.isArray(p0.data) ? p0.data[1] : p0.data
-      if (!Number.isFinite(Number(v))) return ''
-      const label = formatFullTime(data[p0.dataIndex]?.time || p0.axisValue, props.period)
-      return `<div style="font-weight:600;margin-bottom:3px">${label}</div>
-        <div>价格 <b>${Number(v).toFixed(decimals)}</b> ${props.unit}</div>`
+      const dataIndex = Number.isFinite(Number(p0?.dataIndex))
+        ? Number(p0.dataIndex)
+        : Math.max(0, categories.indexOf(p0?.axisValue))
+      const label = formatFullTime(data[dataIndex]?.time || p0.axisValue, props.period)
+      return buildLineTooltipHtml({
+        label,
+        value: v,
+        unit: props.unit,
+        decimals,
+        nearest: findNearestFiniteClose(data, dataIndex),
+      })
     }
     const [open, close, low, high] = k.data.slice(1)
     const color = close >= open ? '#e23b3b' : '#1aa260'
@@ -437,7 +452,10 @@ const onDataZoom = () => {
   const opt = chartInstance.getOption()
   const dz = (opt.dataZoom || [])[0]
   if (!dz) return
-  const data = useIntradayProfile.value ? buildIntradayTimeline(bars.value, { sourceKey: props.sourceKey }).data : bars.value
+  const timeline = useIntradayProfile.value ? buildIntradayTimeline(bars.value, { sourceKey: props.sourceKey }) : null
+  const data = timeline
+    ? mergeRealtimeSamplesIntoTimeline(timeline.data, props.realtimeTicks, { sourceKey: props.sourceKey })
+    : bars.value
   const n = data.length
   if (n < 1) return
   const sPct = Number(dz.start ?? 0)
@@ -503,7 +521,7 @@ watch(() => props.resetKey, () => {
 })
 
 // 数据/止损变化: 保持当前缩放窗口重绘
-watch(() => [props.candles, props.stopLoss], () => {
+watch(() => [props.candles, props.stopLoss, props.realtimeTicks], () => {
   nextTick(render)
 }, { deep: true })
 </script>
