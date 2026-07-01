@@ -8,6 +8,14 @@
 Authorization: Bearer change-me-local-token
 ```
 
+邮件提醒规则接口还需要邮箱验证会话：
+
+```http
+X-Alert-Session: <session_token>
+```
+
+会话通过 `/api/alerts/session/request-code` 和 `/api/alerts/session/verify` 获取。提醒规则按已验证邮箱隔离，接口返回的邮箱为脱敏值。
+
 ## GET /api/health
 
 健康检查，无需认证。
@@ -101,6 +109,48 @@ Authorization: Bearer change-me-local-token
 
 `predicted_range` 是后端统一计算的系统预估日内区间。前端展示和邮件提醒判断都使用该字段。
 
+## GET /api/market/factors
+
+返回黄金影响因子榜。该接口只用于解释行情驱动，不参与 `/api/market/snapshot` 的结构化买入建议。
+
+可选查询参数：
+
+- `source`: 指定银行积存金行情源，例如 `icbc`、`jdjygold_zheshang`、`hongyun_gold_reference`。
+
+示例：
+
+```http
+GET /api/market/factors?source=icbc
+Authorization: Bearer change-me-local-token
+```
+
+核心响应：
+
+```json
+{
+  "generated_at": "2026-07-02T10:00:00+08:00",
+  "basis": "银行积存金 CNY/g",
+  "overall_bias": {"signal": "positive", "score": 1.4},
+  "items": [
+    {
+      "key": "bank_price",
+      "label": "银行积存金",
+      "value": 894.7,
+      "change": 4.7,
+      "unit": "CNY/g",
+      "signal": "positive",
+      "strength": 4.7,
+      "source_name": "工商银行积存金",
+      "updated_at": "2026-07-02T10:00:00+08:00",
+      "explanation": "当前银行对客积存金报价上行偏利好，下行偏利空。",
+      "status": "ok"
+    }
+  ]
+}
+```
+
+`signal` 使用 `positive`、`negative`、`neutral`；`status` 为 `ok`、`stale` 或 `unavailable`。前端按接口排序全量展示因子，不再额外折叠。
+
 ## GET /api/market/monthly-reviews
 
 返回单面板使用的三类 30 日行情：黄金、白银、铂金。
@@ -178,9 +228,58 @@ Authorization: Bearer change-me-local-token
 }
 ```
 
+## POST /api/alerts/session/request-code
+
+向收件邮箱发送验证码。
+
+请求：
+
+```json
+{
+  "email": "me@example.com"
+}
+```
+
+响应：
+
+```json
+{
+  "sent": true,
+  "subscriber": {
+    "email": "me***@example.com"
+  }
+}
+```
+
+## POST /api/alerts/session/verify
+
+验证邮箱并返回提醒会话 token。
+
+如果这是该邮箱第一次拥有提醒规则，后端会自动复制一份统一默认规则：启用、默认行情源、清仓价/抄底价/预估高点/预估低点四类提醒开关全部打开；自定义清仓价和抄底价初始为空，用户可在前端保存自己的价格。
+
+请求：
+
+```json
+{
+  "email": "me@example.com",
+  "code": "123456"
+}
+```
+
+响应：
+
+```json
+{
+  "session_token": "token",
+  "subscriber": {
+    "email": "me***@example.com"
+  }
+}
+```
+
 ## GET /api/alerts/rules
 
-返回已保存的邮件提醒规则。
+返回当前已验证邮箱下的邮件提醒规则。
 
 响应：
 
@@ -191,7 +290,7 @@ Authorization: Bearer change-me-local-token
       "id": 1,
       "enabled": true,
       "source": "icbc",
-      "recipient_email": "me@example.com",
+      "recipient_email": "me***@example.com",
       "target_high_price": 900,
       "target_low_price": 870,
       "notify_on_custom_high": true,
@@ -210,7 +309,7 @@ Authorization: Bearer change-me-local-token
 
 ## POST /api/alerts/rules
 
-创建邮件提醒规则。
+创建当前已验证邮箱下的邮件提醒规则。收件邮箱来自 `X-Alert-Session` 对应的已验证邮箱，请求体不需要传 `recipient_email`。
 
 请求：
 
@@ -218,7 +317,6 @@ Authorization: Bearer change-me-local-token
 {
   "enabled": true,
   "source": "icbc",
-  "recipient_email": "me@example.com",
   "target_high_price": 900,
   "target_low_price": 870,
   "notify_on_custom_high": true,
@@ -233,21 +331,21 @@ Authorization: Bearer change-me-local-token
 ```json
 {
   "rule": {
-    "id": 1,
-    "enabled": true,
-    "source": "icbc",
-    "recipient_email": "me@example.com"
+      "id": 1,
+      "enabled": true,
+      "source": "icbc",
+      "recipient_email": "me***@example.com"
   }
 }
 ```
 
 ## PUT /api/alerts/rules/{id}
 
-更新邮件提醒规则。修改 `target_high_price` 或 `target_low_price` 时，后端会重置对应自定义目标价的触发状态。
+更新当前已验证邮箱下的邮件提醒规则。修改 `target_high_price` 或 `target_low_price` 时，后端会重置对应自定义目标价的触发状态。
 
 ## DELETE /api/alerts/rules/{id}
 
-删除邮件提醒规则及其状态。
+删除当前已验证邮箱下的邮件提醒规则及其状态。
 
 响应：
 
@@ -257,13 +355,12 @@ Authorization: Bearer change-me-local-token
 
 ## POST /api/alerts/test-email
 
-使用当前 SMTP 环境变量发送测试邮件。
+使用当前 SMTP 环境变量向已验证邮箱发送测试邮件。
 
 请求：
 
 ```json
 {
-  "recipient_email": "me@example.com",
   "source_label": "工商银行积存金",
   "current_price": 890,
   "display_unit": "CNY/g",

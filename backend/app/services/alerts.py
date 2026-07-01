@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import secrets
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,6 +13,7 @@ from backend.app.core.config import PROJECT_ROOT
 @dataclass(frozen=True)
 class AlertRule:
     id: Optional[int] = None
+    subscriber_id: Optional[int] = None
     enabled: bool = True
     source: str = "icbc"
     recipient_email: str = ""
@@ -52,9 +54,36 @@ class AlertEvent:
 
 
 @dataclass(frozen=True)
+class AlertSubscriber:
+    id: Optional[int] = None
+    email: str = ""
+    session_token: str = ""
+    verification_code_hash: str = ""
+    verification_expires_at: str = ""
+    verified_at: Optional[str] = None
+    last_verification_sent_at: Optional[str] = None
+    last_test_email_sent_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class EvaluationResult:
     events: list[AlertEvent]
     state: AlertState
+
+
+DEFAULT_ALERT_RULE_TEMPLATES: tuple[dict[str, Any], ...] = (
+    {
+        "enabled": True,
+        "target_high_price": None,
+        "target_low_price": None,
+        "notify_on_custom_high": True,
+        "notify_on_custom_low": True,
+        "notify_on_predicted_high": True,
+        "notify_on_predicted_low": True,
+    },
+)
 
 
 def evaluate_alert_rule(
@@ -184,6 +213,7 @@ class AlertStore:
             """
             CREATE TABLE IF NOT EXISTS alert_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscriber_id INTEGER,
                 enabled INTEGER NOT NULL,
                 source TEXT NOT NULL,
                 recipient_email TEXT NOT NULL,
@@ -198,6 +228,7 @@ class AlertStore:
             )
             """
         )
+        self._ensure_column("alert_rules", "subscriber_id", "INTEGER")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS alert_states (
@@ -215,43 +246,214 @@ class AlertStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alert_subscribers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                session_token TEXT NOT NULL UNIQUE,
+                verification_code_hash TEXT NOT NULL,
+                verification_expires_at TEXT NOT NULL,
+                verified_at TEXT,
+                last_verification_sent_at TEXT,
+                last_test_email_sent_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_rules_subscriber_id ON alert_rules(subscriber_id)")
         self._conn.commit()
 
-    def create_rule(self, payload: dict[str, Any]) -> AlertRule:
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def upsert_subscriber_verification(
+        self,
+        email: str,
+        *,
+        code_hash: str,
+        expires_at: str,
+    ) -> AlertSubscriber:
+        normalized = _normalize_email(email)
         now_text = _now_text()
-        rule = _rule_from_payload(payload, created_at=now_text, updated_at=now_text)
+        existing = self.get_subscriber_by_email(normalized)
+        if existing:
+            session_token = existing.session_token
+            created_at = existing.created_at or now_text
+            self._conn.execute(
+                """
+                UPDATE alert_subscribers
+                SET verification_code_hash = ?, verification_expires_at = ?,
+                    last_verification_sent_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (code_hash, expires_at, now_text, now_text, existing.id),
+            )
+            self._conn.commit()
+            return replace(
+                existing,
+                verification_code_hash=code_hash,
+                verification_expires_at=expires_at,
+                last_verification_sent_at=now_text,
+                updated_at=now_text,
+                created_at=created_at,
+                session_token=session_token,
+            )
+        cursor = self._conn.execute(
+            """
+            INSERT INTO alert_subscribers (
+                email, session_token, verification_code_hash, verification_expires_at,
+                verified_at, last_verification_sent_at, last_test_email_sent_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (normalized, f"pending-{secrets.token_urlsafe(18)}", code_hash, expires_at, None, now_text, None, now_text, now_text),
+        )
+        self._conn.commit()
+        subscriber = self.get_subscriber_by_email(normalized)
+        if subscriber:
+            return subscriber
+        return AlertSubscriber(
+            id=int(cursor.lastrowid),
+            email=normalized,
+            session_token="",
+            verification_code_hash=code_hash,
+            verification_expires_at=expires_at,
+            last_verification_sent_at=now_text,
+            created_at=now_text,
+            updated_at=now_text,
+        )
+
+    def verify_subscriber(self, email: str, *, code_hash: str, session_token: str) -> AlertSubscriber:
+        subscriber = self.get_subscriber_by_email(email)
+        if not subscriber or subscriber.verification_code_hash != code_hash:
+            raise ValueError("verification code is invalid")
+        if _is_expired(subscriber.verification_expires_at):
+            raise ValueError("verification code expired")
+        now_text = _now_text()
+        self._conn.execute(
+            """
+            UPDATE alert_subscribers
+            SET session_token = ?, verified_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (session_token, now_text, now_text, subscriber.id),
+        )
+        self._conn.commit()
+        return replace(subscriber, session_token=session_token, verified_at=now_text, updated_at=now_text)
+
+    def get_subscriber_by_email(self, email: str) -> Optional[AlertSubscriber]:
+        row = self._conn.execute(
+            "SELECT * FROM alert_subscribers WHERE email = ?",
+            (_normalize_email(email),),
+        ).fetchone()
+        return _subscriber_from_row(row) if row else None
+
+    def get_subscriber_by_token(self, token: str) -> Optional[AlertSubscriber]:
+        row = self._conn.execute(
+            "SELECT * FROM alert_subscribers WHERE session_token = ? AND verified_at IS NOT NULL",
+            (str(token or "").strip(),),
+        ).fetchone()
+        return _subscriber_from_row(row) if row else None
+
+    def mark_test_email_sent(self, subscriber_id: int) -> None:
+        now_text = _now_text()
+        self._conn.execute(
+            "UPDATE alert_subscribers SET last_test_email_sent_at = ?, updated_at = ? WHERE id = ?",
+            (now_text, now_text, subscriber_id),
+        )
+        self._conn.commit()
+
+    def create_rule(self, payload: dict[str, Any], *, subscriber: Optional[AlertSubscriber] = None) -> AlertRule:
+        now_text = _now_text()
+        rule_payload = dict(payload)
+        if subscriber:
+            rule_payload["subscriber_id"] = subscriber.id
+            rule_payload["recipient_email"] = subscriber.email
+        rule = _rule_from_payload(rule_payload, created_at=now_text, updated_at=now_text)
         cursor = self._conn.execute(
             """
             INSERT INTO alert_rules (
-                enabled, source, recipient_email, target_high_price, target_low_price,
+                subscriber_id, enabled, source, recipient_email, target_high_price, target_low_price,
                 notify_on_custom_high, notify_on_custom_low, notify_on_predicted_high,
                 notify_on_predicted_low, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             _rule_values(rule),
         )
         self._conn.commit()
         return replace(rule, id=int(cursor.lastrowid))
 
-    def list_rules(self) -> list[AlertRule]:
-        rows = self._conn.execute("SELECT * FROM alert_rules ORDER BY id ASC").fetchall()
+    def list_rules(self, *, subscriber_id: Optional[int] = None) -> list[AlertRule]:
+        if subscriber_id is None:
+            rows = self._conn.execute("SELECT * FROM alert_rules ORDER BY id ASC").fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM alert_rules WHERE subscriber_id = ? ORDER BY id ASC",
+                (subscriber_id,),
+            ).fetchall()
         return [_rule_from_row(row) for row in rows]
 
-    def get_rule(self, rule_id: int) -> Optional[AlertRule]:
-        row = self._conn.execute("SELECT * FROM alert_rules WHERE id = ?", (rule_id,)).fetchone()
+    def list_delivery_rules(self) -> list[AlertRule]:
+        rows = self._conn.execute(
+            """
+            SELECT alert_rules.*
+            FROM alert_rules
+            INNER JOIN alert_subscribers ON alert_subscribers.id = alert_rules.subscriber_id
+            WHERE alert_subscribers.verified_at IS NOT NULL
+            ORDER BY alert_rules.id ASC
+            """
+        ).fetchall()
+        return [_rule_from_row(row) for row in rows]
+
+    def ensure_default_rules_for_subscriber(
+        self,
+        subscriber: AlertSubscriber,
+        *,
+        default_source: str,
+    ) -> list[AlertRule]:
+        if subscriber.id is None or self.list_rules(subscriber_id=subscriber.id):
+            return []
+        created: list[AlertRule] = []
+        for template in DEFAULT_ALERT_RULE_TEMPLATES:
+            created.append(
+                self.create_rule(
+                    {
+                        **template,
+                        "source": default_source,
+                    },
+                    subscriber=subscriber,
+                )
+            )
+        return created
+
+    def get_rule(self, rule_id: int, *, subscriber_id: Optional[int] = None) -> Optional[AlertRule]:
+        if subscriber_id is None:
+            row = self._conn.execute("SELECT * FROM alert_rules WHERE id = ?", (rule_id,)).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT * FROM alert_rules WHERE id = ? AND subscriber_id = ?",
+                (rule_id, subscriber_id),
+            ).fetchone()
         return _rule_from_row(row) if row else None
 
-    def update_rule(self, rule_id: int, payload: dict[str, Any]) -> Optional[AlertRule]:
-        current = self.get_rule(rule_id)
+    def update_rule(self, rule_id: int, payload: dict[str, Any], *, subscriber_id: Optional[int] = None) -> Optional[AlertRule]:
+        current = self.get_rule(rule_id, subscriber_id=subscriber_id)
         if current is None:
             return None
-        data = {**asdict(current), **payload, "id": rule_id, "created_at": current.created_at, "updated_at": _now_text()}
+        protected_payload = dict(payload)
+        protected_payload.pop("recipient_email", None)
+        protected_payload.pop("subscriber_id", None)
+        data = {**asdict(current), **protected_payload, "id": rule_id, "created_at": current.created_at, "updated_at": _now_text()}
         next_rule = _rule_from_payload(data, rule_id=rule_id, created_at=current.created_at, updated_at=data["updated_at"])
         self._conn.execute(
             """
             UPDATE alert_rules
-            SET enabled = ?, source = ?, recipient_email = ?, target_high_price = ?, target_low_price = ?,
+            SET subscriber_id = ?, enabled = ?, source = ?, recipient_email = ?, target_high_price = ?, target_low_price = ?,
                 notify_on_custom_high = ?, notify_on_custom_low = ?, notify_on_predicted_high = ?,
                 notify_on_predicted_low = ?, created_at = ?, updated_at = ?
             WHERE id = ?
@@ -265,7 +467,10 @@ class AlertStore:
         self._conn.commit()
         return next_rule
 
-    def delete_rule(self, rule_id: int) -> bool:
+    def delete_rule(self, rule_id: int, *, subscriber_id: Optional[int] = None) -> bool:
+        current = self.get_rule(rule_id, subscriber_id=subscriber_id)
+        if current is None:
+            return False
         cursor = self._conn.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
         self._conn.execute("DELETE FROM alert_states WHERE rule_id = ?", (rule_id,))
         self._conn.commit()
@@ -359,6 +564,7 @@ def _rule_from_payload(
 ) -> AlertRule:
     return AlertRule(
         id=rule_id,
+        subscriber_id=_optional_int(payload.get("subscriber_id")),
         enabled=_bool(payload.get("enabled", True)),
         source=str(payload.get("source") or "icbc"),
         recipient_email=str(payload.get("recipient_email") or ""),
@@ -376,6 +582,7 @@ def _rule_from_payload(
 def _rule_from_row(row: sqlite3.Row) -> AlertRule:
     return AlertRule(
         id=int(row["id"]),
+        subscriber_id=row["subscriber_id"] if "subscriber_id" in row.keys() else None,
         enabled=bool(row["enabled"]),
         source=row["source"],
         recipient_email=row["recipient_email"],
@@ -392,6 +599,7 @@ def _rule_from_row(row: sqlite3.Row) -> AlertRule:
 
 def _rule_values(rule: AlertRule) -> tuple[Any, ...]:
     return (
+        rule.subscriber_id,
         int(rule.enabled),
         rule.source,
         rule.recipient_email,
@@ -431,6 +639,15 @@ def _optional_float(value: Any) -> Optional[float]:
         return None
 
 
+def _optional_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"", "0", "false", "no", "off"}
@@ -439,6 +656,44 @@ def _bool(value: Any) -> bool:
 
 def _now_text() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _normalize_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def mask_email(email: str) -> str:
+    local, _, domain = _normalize_email(email).partition("@")
+    if not local or not domain:
+        return _normalize_email(email)
+    if len(local) <= 2:
+        return f"{local}***@{domain}"
+    return f"{local[:2]}***@{domain}"
+
+
+def _subscriber_from_row(row: sqlite3.Row) -> AlertSubscriber:
+    return AlertSubscriber(
+        id=int(row["id"]),
+        email=row["email"],
+        session_token=row["session_token"],
+        verification_code_hash=row["verification_code_hash"],
+        verification_expires_at=row["verification_expires_at"],
+        verified_at=row["verified_at"],
+        last_verification_sent_at=row["last_verification_sent_at"],
+        last_test_email_sent_at=row["last_test_email_sent_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _is_expired(text: str) -> bool:
+    if not text:
+        return True
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp() < datetime.now(timezone.utc).timestamp()
+    except ValueError:
+        return True
 
 
 def _resolve_db_path(raw_path: str) -> Path:

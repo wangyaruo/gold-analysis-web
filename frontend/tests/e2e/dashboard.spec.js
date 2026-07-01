@@ -57,6 +57,170 @@ const snapshot = {
   max_data_delay_seconds: 5,
 }
 
+const factorsPayload = {
+  generated_at: '2026-07-02T10:00:00+08:00',
+  basis: '银行积存金 CNY/g',
+  overall_bias: { signal: 'positive', score: 1.8 },
+  items: [
+    {
+      key: 'bank_price',
+      label: '银行积存金',
+      value: 552.05,
+      change: 4.7,
+      unit: 'CNY/g',
+      signal: 'positive',
+      strength: 4.7,
+      source_name: '工商银行积存金',
+      updated_at: '2026-07-02T10:00:00+08:00',
+      explanation: '当前银行报价较前值上行，对人民币计价积存金偏利好。',
+      status: 'ok',
+    },
+    {
+      key: 'real_yield',
+      label: '美国实际利率',
+      value: 2.16,
+      change: -0.02,
+      unit: '%',
+      signal: 'positive',
+      strength: 2.0,
+      source_name: 'FRED DFII10',
+      updated_at: '2026-06-29',
+      explanation: '实际利率下行会降低持有黄金的机会成本。',
+      status: 'ok',
+    },
+    {
+      key: 'usd_index',
+      label: '美元指数',
+      value: 120.89,
+      change: -0.17,
+      unit: '',
+      signal: 'positive',
+      strength: 1.7,
+      source_name: 'FRED DTWEXBGS',
+      updated_at: '2026-06-26',
+      explanation: '美元走弱通常减轻国际金价压力。',
+      status: 'ok',
+    },
+    {
+      key: 'usd_cny',
+      label: '美元兑人民币',
+      value: 6.798,
+      change: 0.02,
+      unit: '',
+      signal: 'positive',
+      strength: 1.5,
+      source_name: 'FRED DEXCHUS',
+      updated_at: '2026-06-26',
+      explanation: '美元兑人民币上行会抬高人民币计价黄金。',
+      status: 'ok',
+    },
+    {
+      key: 'sge_au9999',
+      label: '上金所Au99.99',
+      value: 890,
+      change: 8,
+      unit: 'CNY/g',
+      signal: 'positive',
+      strength: 1.3,
+      source_name: '上海黄金交易所',
+      updated_at: '2026-07-02',
+      explanation: '境内黄金现货上行，对银行积存金报价形成支撑。',
+      status: 'ok',
+    },
+    {
+      key: 'vix',
+      label: '避险波动率',
+      value: 16.45,
+      change: -1.2,
+      unit: '',
+      signal: 'negative',
+      strength: 1.1,
+      source_name: 'FRED VIXCLS',
+      updated_at: '2026-06-30',
+      explanation: '波动率回落代表避险需求降温。',
+      status: 'ok',
+    },
+    {
+      key: 'central_bank_news',
+      label: '央行购金',
+      value: null,
+      change: null,
+      unit: '',
+      signal: 'positive',
+      strength: 0.7,
+      source_name: 'NewsAPI',
+      updated_at: '2026-07-02T10:00:00+08:00',
+      explanation: '新闻命中央行购金关键词。',
+      status: 'ok',
+    },
+    {
+      key: 'xau_usd',
+      label: '国际金价',
+      value: null,
+      change: null,
+      unit: 'USD/oz',
+      signal: 'neutral',
+      strength: 0,
+      source_name: 'Twelve Data XAU/USD',
+      updated_at: null,
+      explanation: '国际金价源未配置。',
+      status: 'stale',
+    },
+    {
+      key: 'inflation_expectation',
+      label: '通胀预期',
+      value: null,
+      change: null,
+      unit: '%',
+      signal: 'neutral',
+      strength: 0,
+      source_name: 'FRED T10YIE',
+      updated_at: null,
+      explanation: '通胀预期数据延迟。',
+      status: 'stale',
+    },
+    {
+      key: 'rate_news',
+      label: '利率新闻',
+      value: null,
+      change: null,
+      unit: '',
+      signal: 'neutral',
+      strength: 0,
+      source_name: 'NewsAPI',
+      updated_at: null,
+      explanation: '暂无明确利率新闻方向。',
+      status: 'stale',
+    },
+    {
+      key: 'fed_policy',
+      label: '美联储政策',
+      value: null,
+      change: null,
+      unit: '',
+      signal: 'neutral',
+      strength: 0,
+      source_name: 'FRED/NewsAPI',
+      updated_at: null,
+      explanation: '政策数据延迟。',
+      status: 'stale',
+    },
+    {
+      key: 'risk_appetite',
+      label: '风险偏好',
+      value: null,
+      change: null,
+      unit: '',
+      signal: 'neutral',
+      strength: 0,
+      source_name: 'FRED VIXCLS',
+      updated_at: null,
+      explanation: '风险偏好数据延迟。',
+      status: 'stale',
+    },
+  ],
+}
+
 const klineBaseTime = new Date()
 klineBaseTime.setHours(12, 0, 0, 0)
 
@@ -247,18 +411,40 @@ const monthlyReviewsPayload = {
 
 let monthlyReviewsRequestCount = 0
 let snapshotRequestCount = 0
+let factorRequestCount = 0
 let klineRequestCount = 0
 let latestKlineSource = ''
+let latestFactorSource = ''
 let alertRules = []
 let testEmailCount = 0
+let alertSessionToken = ''
+let requestCodeCount = 0
+let verifyCodeCount = 0
+let lastAlertRulePayload = null
+let lastAlertRuleSession = ''
+let lastTestEmailPayload = null
+let lastTestEmailSession = ''
 
 test.beforeEach(async ({ page }) => {
   monthlyReviewsRequestCount = 0
   snapshotRequestCount = 0
+  factorRequestCount = 0
   klineRequestCount = 0
   latestKlineSource = ''
+  latestFactorSource = ''
   alertRules = []
   testEmailCount = 0
+  alertSessionToken = ''
+  requestCodeCount = 0
+  verifyCodeCount = 0
+  lastAlertRulePayload = null
+  lastAlertRuleSession = ''
+  lastTestEmailPayload = null
+  lastTestEmailSession = ''
+
+  await page.addInitScript(() => {
+    window.localStorage.clear()
+  })
 
   await page.route('**/api/config/public', async (route) => {
     await route.fulfill({
@@ -287,17 +473,24 @@ test.beforeEach(async ({ page }) => {
 
   await page.route('**/api/alerts/rules**', async (route) => {
     const request = route.request()
+    const session = request.headers()['x-alert-session'] || ''
+    if (session !== alertSessionToken) {
+      await route.fulfill({ status: 401, json: { detail: 'alert session is required' } })
+      return
+    }
     if (request.method() === 'GET') {
       await route.fulfill({ json: { rules: alertRules, smtp_configured: true } })
       return
     }
     if (request.method() === 'POST') {
       const body = JSON.parse(request.postData())
+      lastAlertRulePayload = body
+      lastAlertRuleSession = session
       const rule = {
         id: alertRules.length + 1,
         enabled: body.enabled ?? true,
         source: body.source || 'icbc',
-        recipient_email: body.recipient_email,
+        recipient_email: 'me***@example.com',
         target_high_price: Number(body.target_high_price),
         target_low_price: Number(body.target_low_price),
         notify_on_custom_high: Boolean(body.notify_on_custom_high),
@@ -313,7 +506,33 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({ json: { deleted: true } })
   })
 
+  await page.route('**/api/alerts/session/request-code', async (route) => {
+    requestCodeCount += 1
+    await route.fulfill({
+      json: {
+        sent: true,
+        subscriber: { email: 'me***@example.com' },
+      },
+    })
+  })
+
+  await page.route('**/api/alerts/session/verify', async (route) => {
+    verifyCodeCount += 1
+    const body = JSON.parse(route.request().postData())
+    expect(body.email).toBe('me@example.com')
+    expect(body.code).toBe('123456')
+    alertSessionToken = 'session-token-a'
+    await route.fulfill({
+      json: {
+        session_token: alertSessionToken,
+        subscriber: { email: 'me***@example.com' },
+      },
+    })
+  })
+
   await page.route('**/api/alerts/test-email', async (route) => {
+    lastTestEmailSession = route.request().headers()['x-alert-session'] || ''
+    lastTestEmailPayload = JSON.parse(route.request().postData())
     testEmailCount += 1
     await route.fulfill({ json: { sent: true } })
   })
@@ -334,6 +553,14 @@ test.beforeEach(async ({ page }) => {
     monthlyReviewsRequestCount += 1
     await route.fulfill({
       json: monthlyReviewsPayload,
+    })
+  })
+
+  await page.route('**/api/market/factors**', async (route) => {
+    factorRequestCount += 1
+    latestFactorSource = new URL(route.request().url()).searchParams.get('source') || ''
+    await route.fulfill({
+      json: factorsPayload,
     })
   })
 
@@ -374,6 +601,15 @@ test('renders realtime market snapshot and recommendation', async ({ page }) => 
   await expect(page.getByTestId('price-source-name')).toContainText('工商银行积存金')
   await expect(page.getByTestId('predicted-low')).toContainText('545.84')
   await expect(page.getByTestId('predicted-high')).toContainText('556.76')
+  await expect(page.getByTestId('factor-board')).toContainText('黄金影响因子')
+  await expect(page.getByTestId('factor-board')).toContainText('银行积存金')
+  await expect(page.getByTestId('factor-board')).toContainText('利好')
+  await expect(page.getByTestId('factor-board')).toContainText('避险波动率')
+  await expect(page.getByTestId('factor-board')).toContainText('央行购金')
+  await expect(page.getByTestId('factor-toggle')).toHaveCount(0)
+  await expect(page.getByTestId('factor-list').locator('.factor-item')).toHaveCount(12)
+  expect(factorRequestCount).toBe(1)
+  expect(latestFactorSource).toBe('icbc')
   await expect(page.locator('.price-meta')).toContainText('刷新 2s')
   await expect(page.locator('.brand-logo-img')).toBeVisible()
   await expect(page.locator('.asset-icon-tile img')).toHaveCount(2)
@@ -386,9 +622,115 @@ test('renders realtime market snapshot and recommendation', async ({ page }) => 
   await expect(page.getByTestId('sentiment-preview')).toContainText('情绪分 +2')
   await expect(page.getByTestId('sentiment-preview')).toContainText('rallies')
   const dashboardBox = await page.locator('.dashboard-screen').boundingBox()
-  expect(dashboardBox.height).toBeLessThanOrEqual(763)
+  const viewportWidth = page.viewportSize().width
+  expect(dashboardBox.width).toBeLessThanOrEqual(viewportWidth)
   const reviewTop = await page.locator('[data-testid="monthly-review"]').first().evaluate((node) => node.getBoundingClientRect().top)
   expect(reviewTop).toBeGreaterThan(700)
+})
+
+test('keeps the price range and dashboard readable on narrow browser widths', async ({ page }) => {
+  await page.setViewportSize({ width: 651, height: 837 })
+  await page.goto('/')
+
+  await expect(page.getByTestId('current-price')).toContainText('552.05')
+
+  const layout = await page.evaluate(() => {
+    const dashboard = document.querySelector('.dashboard-screen')
+    const priceCard = document.querySelector('.price-card')
+    const adviceCard = document.querySelector('.advice-card')
+    const rangeRow = document.querySelector('.price-range-row')
+    const chips = Array.from(document.querySelectorAll('.price-range-chip'))
+
+    const rectOf = (node) => {
+      const rect = node.getBoundingClientRect()
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      }
+    }
+
+    return {
+      viewportWidth: window.innerWidth,
+      dashboard: rectOf(dashboard),
+      priceCard: rectOf(priceCard),
+      adviceCard: rectOf(adviceCard),
+      rangeRow: rectOf(rangeRow),
+      chips: chips.map(rectOf),
+    }
+  })
+
+  expect(layout.dashboard.width).toBeLessThanOrEqual(layout.viewportWidth)
+  expect(layout.adviceCard.top).toBeGreaterThan(layout.priceCard.bottom - 1)
+  expect(layout.rangeRow.right).toBeLessThanOrEqual(layout.priceCard.right + 1)
+  expect(layout.rangeRow.left).toBeGreaterThanOrEqual(layout.priceCard.left - 1)
+  expect(layout.chips).toHaveLength(4)
+
+  for (const chip of layout.chips) {
+    expect(chip.left).toBeGreaterThanOrEqual(layout.rangeRow.left - 1)
+    expect(chip.right).toBeLessThanOrEqual(layout.rangeRow.right + 1)
+    expect(chip.width).toBeGreaterThan(0)
+    expect(chip.height).toBeGreaterThan(0)
+  }
+})
+
+test('keeps the final factor row clear of the card edge in compact dashboard', async ({ page }) => {
+  await page.setViewportSize({ width: 877, height: 751 })
+  await page.goto('/')
+
+  await expect(page.getByTestId('factor-board')).toContainText('黄金影响因子')
+
+  const factorLayout = await page.evaluate(() => {
+    const card = document.querySelector('[data-testid="factor-board"]')
+    const items = Array.from(document.querySelectorAll('[data-testid="factor-board"] .factor-item'))
+    const lastItem = items[items.length - 1]
+    const rectOf = (node) => {
+      const rect = node.getBoundingClientRect()
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+      }
+    }
+
+    return {
+      card: rectOf(card),
+      lastItem: rectOf(lastItem),
+      itemCount: items.length,
+    }
+  })
+
+  expect(factorLayout.itemCount).toBe(12)
+  expect(factorLayout.lastItem.bottom).toBeLessThanOrEqual(factorLayout.card.bottom - 8)
+})
+
+test('keeps the compact factor list high in the card at tablet widths', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 751 })
+  await page.goto('/')
+
+  await expect(page.getByTestId('factor-board')).toContainText('上金所Au99.99')
+
+  const factorLayout = await page.evaluate(() => {
+    const card = document.querySelector('[data-testid="factor-board"]')
+    const firstItem = document.querySelector('[data-testid="factor-board"] .factor-item')
+    const rectOf = (node) => {
+      const rect = node.getBoundingClientRect()
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+      }
+    }
+
+    return {
+      card: rectOf(card),
+      firstItem: rectOf(firstItem),
+    }
+  })
+
+  expect(factorLayout.firstItem.top).toBeLessThanOrEqual(factorLayout.card.top + 44)
 })
 
 test('updates sentiment preview when sentiment zones are clicked', async ({ page }) => {
@@ -473,6 +815,16 @@ test('saves alert rule and sends test email', async ({ page }) => {
   await page.goto('/')
 
   await expect(page.getByTestId('alert-panel')).toBeVisible()
+  await expect(page.getByTestId('alert-panel')).toContainText('先验证邮箱')
+  await page.getByTestId('alert-email').fill('me@example.com')
+  await page.getByTestId('alert-request-code').click()
+  await expect(page.getByTestId('alert-status')).toContainText('验证码已发送')
+  expect(requestCodeCount).toBe(1)
+
+  await page.getByTestId('alert-code').fill('123456')
+  await page.getByTestId('alert-verify').click()
+  await expect(page.getByTestId('alert-verified-email')).toContainText('me***@example.com')
+  expect(verifyCodeCount).toBe(1)
   await expect(page.getByTestId('alert-panel')).toContainText('预设清仓价格')
   await expect(page.getByTestId('alert-panel')).toContainText('预设抄底价格')
   await expect(page.getByTestId('alert-panel')).toContainText('清仓价')
@@ -482,13 +834,14 @@ test('saves alert rule and sends test email', async ({ page }) => {
   await expect(page.getByTestId('alert-custom-low')).toBeChecked()
   await expect(page.getByTestId('alert-predicted-high')).toBeChecked()
   await expect(page.getByTestId('alert-predicted-low')).toBeChecked()
-  await page.getByTestId('alert-email').fill('me@example.com')
   await page.getByTestId('alert-target-high').fill('900')
   await page.getByTestId('alert-target-low').fill('870')
   await page.getByTestId('alert-save').click()
 
   await expect(page.getByTestId('alert-status')).toContainText('已保存')
-  expect(alertRules[0].recipient_email).toBe('me@example.com')
+  expect(lastAlertRuleSession).toBe('session-token-a')
+  expect(lastAlertRulePayload.recipient_email).toBeUndefined()
+  expect(alertRules[0].recipient_email).toBe('me***@example.com')
   expect(alertRules[0].target_high_price).toBe(900)
   expect(alertRules[0].notify_on_custom_high).toBe(true)
 
@@ -496,4 +849,6 @@ test('saves alert rule and sends test email', async ({ page }) => {
 
   await expect(page.getByTestId('alert-status')).toContainText('测试邮件已发送')
   expect(testEmailCount).toBe(1)
+  expect(lastTestEmailSession).toBe('session-token-a')
+  expect(lastTestEmailPayload.recipient_email).toBeUndefined()
 })
